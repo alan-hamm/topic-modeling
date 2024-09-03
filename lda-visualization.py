@@ -16,17 +16,22 @@ train_metrics_csv = pd.read_parquet(r"C:\_harvester\data\lda-models\2010s_html\m
 
 
 print(train_metrics_csv.head())
+
+
+
 #%%
 
 log_dir = r'C:\_harvester\data\lda-models\2010s_html\log'
 
-
+subset_df = train_metrics_csv[train_metrics_csv['type'] == 'eval']
 # Plotting the performance curves
-iterations = range(START_TOPICS, END_TOPICS + 1, STEP_SIZE)
-
+x_axis=[]
+#iterations = range(START_TOPICS, END_TOPICS + 1, STEP_SIZE)
+for i in range(len(subset_df)):
+    x_axis.append(i)
 # Plotting the performance curves for training data
 plt.figure(figsize=(10, 5))
-plt.plot(iterations, train_metrics_csv['coherence_mean'], label='Coherence Mean')
+plt.plot(x_axis, subset_df['coherence_mean'], label='Coherence Mean')
 #plt.plot(iterations, train_metrics_csv['convergence_score'], label='Training Convergence Score')
 #plt.plot(iterations, train_metrics_csv['log_perplexity'], label='Training Log Perplexity')
 
