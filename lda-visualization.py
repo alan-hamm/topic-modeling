@@ -30,7 +30,7 @@ x_axis=[]
 for i in range(len(subset_df)):
     x_axis.append(i)
 # Plotting the performance curves for training data
-plt.figure(figsize=(10, 5))
+plt.figure(figsize=(25, 15))
 plt.plot(x_axis, subset_df['coherence_mean'], label='Coherence Mean')
 #plt.plot(iterations, train_metrics_csv['convergence_score'], label='Training Convergence Score')
 #plt.plot(iterations, train_metrics_csv['log_perplexity'], label='Training Log Perplexity')
