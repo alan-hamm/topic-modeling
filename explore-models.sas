@@ -45,8 +45,8 @@ expected_dtypes = {
 data WORK.METADATA    ;
 %let _EFIERR_ = 0; /* set the ERROR detection macro variable */
 infile 'C:\_harvester\data\lda-models\2010s_html\metadata\metadata-09082024.csv' delimiter = ';' flowover DSD lrecl=32767 firstobs=2 TERMSTR=cr;
-   informat i $84. ;
-   informat t $53. ;
+   informat index $84. ;
+   informat type $53. ;
    informat batch_size best32. ;
    informat text $87. ;
    informat text_sha256 $64. ;
@@ -69,8 +69,8 @@ infile 'C:\_harvester\data\lda-models\2010s_html\metadata\metadata-09082024.csv'
     informat top_words $78. ;
 	informat time ANYDTDTE.;
 
-    format i $84. ;
-    format t $53. ;
+    format index $84. ;
+    format type $53. ;
     format batch_size best12. ;
     format text $87. ;
     format text_sha256 $64. ;
@@ -93,8 +93,8 @@ infile 'C:\_harvester\data\lda-models\2010s_html\metadata\metadata-09082024.csv'
     format top_words $78. ;
 	format time datetime20.1;
  input
-             i  $
-             t  $
+             index  $
+             type  $
              batch_size
              text  $
              text_sha256  $
@@ -168,35 +168,36 @@ proc sql;
 quit; 
 
 
-proc sql;
-
-      INSERT INTO a.Metadata (i, t, batch_size, text, text_sha256, text_md5, convergence, perplexity, coherence, topics, 
-                            alpha_str, n_alpha, beta_str, n_beta, passes, iterations, update_every, eval_every, 
-                            chunksize ,random_state ,per_word_topics ,top_words ,time)
-      SELECT i, t, batch_size, text, text_sha256, text_md5, convergence, perplexity, coherence, topics, 
-                            alpha_str, n_alpha, beta_str, n_beta, passes, iterations, update_every, eval_every, 
-     	 chunksize ,random_state ,per_word_topics ,top_words ,time
-		from Metadata;
-quit;
-
 data metadata_fixed;
-	set metadata(rename=(coherence=_coherence));
-	label _perplexity = "perplexity=2^(-per_word_bound)"
-		  perplexity = "NLL ''Negative Log Likelihood''";
+	set metadata(rename=(coherence=_coherence perplexity=per_word_bound));
+	label _perplexity_ = "_perplexity_ = 2^(-per_word_bound)"
+		  per_word_bound = "NLL ''Negative Log Likelihood''";
 	if _coherence = compress(_coherence,,'ka') > 0 then coherence=input('0.00000',best32.);
 	else coherence=input(_coherence, best32.);
-	_perplexity = 2**(-1*perplexity);
+	_perplexity_ = 2**(-1*per_word_bound);
 	drop _coherence;
 run;
 
 ods graphics on / width=1000PX;
+ods html close;
+ods pdf file = "C:\_harvester\data\lda-models\2010s_html\stats\2010-2014-univariate.pdf";
+title c=red "2010 - 2014 Univariate of Train Data";
+ods proclabel="Univariate of Train Data";
+proc univariate data=metadata_fixed(where=(type='train')) plots; var coherence per_word_bound _perplexity_; *histogram coherence perplexity _perplexity; run;
 
-title "Univariate of Train Data";
-proc univariate data=metadata_fixed(where=(type='train')) plots; var coherence perplexity _perplexity; *histogram coherence perplexity _perplexity; run;
-title;
-title "Univariate of Eval Data";
-proc univariate data=metadata_fixed(where=(type='eval')) plots; var coherence perplexity _perplexity; *histogram coherence perplexity _perplexity; run;
-title;
+title "Train Frequency Table";
+ods proclabel="Train Frequency Table";
+proc freq data=metadata_fixed(where=(type="train")); tables alpha_str*beta_str; tables n_alpha*n_beta; run;
+
+title c=red "2010 - 2014 Univariate of Eval Data";
+ods proclabel="Univariate of Eval Data";
+proc univariate data=metadata_fixed(where=(type='eval')) plots; var coherence per_word_bound _perplexity_; *histogram coherence perplexity _perplexity; run;
+title "Eval Frequency Table";
+ods proclabel="Eval Frequency Table";
+proc freq data=metadata_fixed(where=(type="eval")); tables alpha_str*beta_str;  tables n_alpha*n_beta; run;
+
+ods pdf close;
+ods html;
 
 proc sql noprint;
 	create table explore as
