@@ -6,10 +6,10 @@
 
 
 #%%
-import pyLDAvis.gensim  # Library for interactive topic model visualization
-import pyLDAvis.gensim_models as gensimvis
-import matplotlib.pyplot as plt
-from mpld3 import save_html
+#import pyLDAvis.gensim  # Library for interactive topic model visualization
+#import pyLDAvis.gensim_models as gensimvis
+#import matplotlib.pyplot as plt
+#from mpld3 import save_html
 
 
 from tqdm import tqdm  # Creates progress bars to visualize the progress of loops or tasks
@@ -49,6 +49,8 @@ from dask.delayed import Delayed # Decorator for creating delayed objects in Das
 #from dask.distributed import as_completed
 from dask.bag import Bag
 from dask import delayed
+from dask import persist
+
 import dask.config
 #from dask.distributed import wait
 from dask.distributed import performance_report, wait, as_completed #,print
@@ -77,7 +79,7 @@ now = datetime.now()
 #       %m is the two-digit month (01-12)
 #       %H%M is the hour (00-23) followed by minute (00-59) in 24hr format
 #log_filename = now.strftime('log-%w-%m-%Y-%H%M.log')
-log_filename = 'log-0830.log'
+log_filename = 'log-0900.log'
 LOGFILE = os.path.join(LOG_DIRECTORY,log_filename)
 
 # Configure logging to write to a file with this name
@@ -128,12 +130,12 @@ DECADE = DECADE_TO_PROCESS
 CORES = 8
 MAXIMUM_CORES = 12
 
-THREADS_PER_CORE = 10
+THREADS_PER_CORE = 8
 
-RAM_MEMORY_LIMIT = "10GB" 
+RAM_MEMORY_LIMIT = "16GB" 
 
 CPU_UTILIZATION_THRESHOLD = 125 # eg 85%
-MEMORY_UTILIZATION_THRESHOLD = 8 * (1024 ** 3)  # Convert GB to bytes
+MEMORY_UTILIZATION_THRESHOLD = 12 * (1024 ** 3)  # Convert GB to bytes
 
 # Specify the local directory path, spilling will be written here
 DASK_DIR = '/_harvester/tmp-dask-out'
@@ -164,7 +166,7 @@ FUTURES_BATCH_SIZE = 100
 
 # Constants for adaptive batching and retries
 # Number of futures to process per iteration
-BATCH_SIZE = 101 # number of documents, value must be greater than FUTURES_BATCH_SIZE
+BATCH_SIZE = 100 # number of documents, value must be greater than FUTURES_BATCH_SIZE
 MAX_BATCH_SIZE = 150 
 INCREASE_FACTOR = 1.05  # Increase batch size by p% upon success
 DECREASE_FACTOR = .10 # Decrease batch size by p% upon failure or timeout
@@ -267,11 +269,10 @@ def save_to_zip(time, text_data, text_json, ldamodel, corpus, dictionary):
         ldamodel_bytes = pickle.dumps(ldamodel)
         corpus_bytes = pickle.dumps(corpus)
         dictionary_bytes = pickle.dumps(dictionary)
-        zf.writestr(f"model_{text_zip_filename}.pkl", ldamodel_bytes)
-        zf.writestr(f"dict_{text_zip_filename}.pkl", dictionary_bytes)
-        zf.writestr(f"corpus_{text_zip_filename}.pkl", corpus_bytes)
-    with open(f"{text_zip_filename}.json", 'w') as jsonfile:
-        json.dump(text_json, jsonfile, ensure_ascii=False)
+        zf.writestr(f"model_{timestamp_str}.pkl", ldamodel)
+        zf.writestr(f"dict_{timestamp_str}.pkl", dictionary)
+        zf.writestr(f"corpus_{timestamp_str}.pkl", corpus)
+        zf.writestr(f"json_{text_json}.pkl", text_json)
     return zip_path
 
 # method to deserialize and return the LDA model object
@@ -402,7 +403,7 @@ def add_model_data_to_metadata(model_data, workers, batchsize):
 
     # Save updated metadata DataFrame back to Parquet file
     df_metadata.to_parquet(parquet_file_path)
-    del df_metadata, df_new_metadata, model_data
+    #del df_metadata, df_new_metadata, model_data
     #garbage_collection(True, 'add_model_data_to_metadata(...)')
     #print("\nthis is the value of the parquet file")
     #print(df_metadata)
@@ -519,59 +520,63 @@ def load(jsonfile):
     return json.load(jsonfile)
 
 def futures_create_lda_datasets(filename, train_ratio, batch_size=FUTURES_BATCH_SIZE):
-    with open(filename, 'r', encoding='utf-8', errors='ignore') as jsonfile:
+    #with open(filename, 'r', encoding='utf-8', errors='ignore') as jsonfile:
+    with open(filename, 'r', encoding='utf-8') as jsonfile:
         data = load(jsonfile)
         print(f"the number of records read from the JSON file: {len(data)}")
         num_samples = len(data)  # Count the total number of samples
         #print(f"the number of documents sampled from the JSON file: {len(data)}\n")
         
-        # Shuffle data indices since we can't shuffle actual lines in a file efficiently
-        indices = list(range(num_samples))
-        shuffle(indices)
+    # Shuffle data indices since we can't shuffle actual lines in a file efficiently
+    indices = list(range(num_samples))
+    shuffle(indices)
         
-        num_train_samples = int(num_samples * train_ratio)  # Calculate number of samples for training
+    num_train_samples = int(num_samples * train_ratio)  # Calculate number of samples for training
         
-        cumulative_count = 0  # Initialize cumulative count
-        # Initialize counters for train and eval datasets
-        train_count = 0
-        eval_count = num_train_samples
+    cumulative_count = 0  # Initialize cumulative count
+    # Initialize counters for train and eval datasets
+    train_count = 0
+    eval_count = num_train_samples
         
-        # Yield batches as dictionaries for both train and eval datasets along with their sample count
-        while train_count < num_train_samples or eval_count < num_samples:
-            if train_count < num_train_samples:
-                # Yield a training batch
-                train_indices_batch = indices[train_count:train_count + batch_size]
-                train_data_batch = [data[idx] for idx in train_indices_batch]
-                if len(train_data_batch) > 0:
-                    yield {
-                        'type': 'train',
-                        'data': train_data_batch,
-                        'indices_batch': train_indices_batch,
-                        'cumulative_count': train_count,
-                        'num_samples': num_train_samples,
-                        'whole_dataset': data[:num_train_samples]
+    # Yield batches as dictionaries for both train and eval datasets along with their sample count
+    while (train_count < num_train_samples or eval_count < num_samples):
+        if train_count < num_train_samples:
+            # Yield a training batch
+            train_indices_batch = indices[train_count:train_count + batch_size]
+            train_data_batch = [data[idx] for idx in train_indices_batch]
+            if len(train_data_batch) > 0:
+                print(f"Yielding training batch: {train_count} to {train_count + len(train_data_batch)}") # ... existing code for yielding training batch
+                yield {
+                    'type': 'train',
+                    'data': train_data_batch,
+                    'indices_batch': train_indices_batch,
+                    'cumulative_count': train_count,
+                    'num_samples': num_train_samples,
+                    'whole_dataset': data[:num_train_samples]
                     }
-                    train_count += len(train_data_batch)
-                    cumulative_count += train_count
+                train_count += len(train_data_batch)
+                cumulative_count += train_count
             
-            if (eval_count < num_samples or train_count >= num_train_samples):
-                # Yield an evaluation batch
-                #print("we are in the method to create the futures trying to create the eval data.")
-                #print(f"the eval count is {eval_count} and the train count is {train_count} and the num train samples is {num_train_samples}\n")
-                eval_indices_batch = indices[eval_count:eval_count + batch_size]
-                eval_data_batch = [data[idx] for idx in eval_indices_batch]
-                #print(f"This is the size of the eval_data_batch from the create futures method {len(eval_data_batch)}\n")
-                if len(eval_data_batch) > 0:
-                    yield {
-                        'type': 'eval',
-                        'data': eval_data_batch,
-                        'indices_batch': eval_indices_batch,
-                        'cumulative_count': num_train_samples - eval_count,
-                        'num_samples': num_train_samples - num_samples,
-                        'whole_dataset': data[num_train_samples:]
+        if (eval_count < num_samples or train_count >= num_train_samples):
+            # Yield an evaluation batch
+            #print("we are in the method to create the futures trying to create the eval data.")
+            #print(f"the eval count is {eval_count} and the train count is {train_count} and the num train samples is {num_train_samples}\n")
+            eval_indices_batch = indices[eval_count:eval_count + batch_size]
+            eval_data_batch = [data[idx] for idx in eval_indices_batch]
+            #print(f"This is the size of the eval_data_batch from the create futures method {len(eval_data_batch)}\n")
+            if len(eval_data_batch) > 0:
+                #print(f"Yielding evaluation batch: {eval_count} to {eval_count + len(eval_data_batch)}") # ... existing code for yielding evaluation batch ...
+                yield {
+                    'type': 'eval',
+                    'data': eval_data_batch,
+                    'indices_batch': eval_indices_batch,
+                    'cumulative_count': num_train_samples - eval_count,
+                    'num_samples': num_train_samples - num_samples,
+                    'whole_dataset': data[num_train_samples:]
                     }
-                    eval_count += len(eval_data_batch)
-                    cumulative_count += eval_count
+                eval_count += len(eval_data_batch)
+                cumulative_count += eval_count
+
                 
     #garbage_collection(False,'futures_create_lda_datasets(...)')
 
@@ -659,7 +664,7 @@ import hashlib
 import re
 # specify the chunk size for LdaModel object
 # Number of documents to be used in each training chunk
-CHUNKSIZE = (get_num_records(DATA_SOURCE)//5)
+CHUNKSIZE = 100
 def train_model(n_topics: int, alpha_str: list, beta_str: list, data: list, train_eval: str, chunksize=CHUNKSIZE):
         models_data = []
         coherehce_score_list = []
@@ -805,7 +810,7 @@ def train_model(n_topics: int, alpha_str: list, beta_str: list, data: list, trai
                 'num_workers': 0, # this value is set to 0 which will signify an error in assignment of adaptive-scaling worker count assigned in process_completed()
                 'batch_size': BATCH_SIZE,
                 'text': [string_result],
-                'text_json': batch_documents,
+                'text_json': pickle.dumps(batch_documents),
                 'text_sha256': hashlib.sha256(string_result.encode()).hexdigest(),
                 'text_md5': hashlib.md5(string_result.encode()).hexdigest(),
                 'convergence': convergence_score,
@@ -832,7 +837,7 @@ def train_model(n_topics: int, alpha_str: list, beta_str: list, data: list, trai
 
         models_data.append(current_increment_data)
         #garbage_collection(False, 'train_model(): convergence and perplexity score calculations')
-        del batch_documents, streaming_documents, lda_model_gensim, dictionary_batch, current_increment_data #, vis, success
+        #del batch_documents, streaming_documents, lda_model_gensim, dictionary_batch, current_increment_data #, vis, success
 
         return models_data
          
@@ -944,8 +949,9 @@ def process_completed_futures(completed_train_futures, completed_eval_futures, w
                     # Handle the case where models_data is not as expected
                     logging.error(f"Received unexpected result from EVAL future: {models_data}")
                     
-    del models_data            
+    #del models_data            
     #garbage_collection(True, 'process_completed_futures(...)')
+    return completed_eval_futures, completed_train_futures
 
 
 # Function to retry processing with incomplete futures
@@ -1093,43 +1099,48 @@ if __name__=="__main__":
     whole_train_dataset = None
     whole_eval_dataset = None
 
-    with tqdm(total=total_num_samples) as pbar:
-        # Process each batch as it is generated
-        for batch_info in futures_create_lda_datasets(DATA_SOURCE, TRAIN_RATIO):
-            total_num_samples += 1
-            if batch_info['type'] == 'train':
-                # Handle training data
-                #print("We are inside the IF/ELSE block for producing TRAIN scatter.")
-                try:
-                    scattered_future = client.scatter(batch_info['data'])
-                    scattered_train_data_futures.append(scattered_future)
-                except Exception as e:
-                    print("there was an issue with creating the TRAIN scattered_future list")
+    # Process each batch as it is generated
+    for batch_info in futures_create_lda_datasets(DATA_SOURCE, TRAIN_RATIO):
+        #print(f"Received batch: {batch_info['type']}")  # Debugging output
+        if batch_info['type'] == 'train':
+            # Handle training data
+            #print("We are inside the IF/ELSE block for producing TRAIN scatter.")
+            try:
+                scattered_future = client.scatter(batch_info['data'])
+                scattered_train_data_futures.append(scattered_future)
+                print(f"Appended to train futures: {len(scattered_train_data_futures)}") # Debugging output
+            except Exception as e:
+                print("there was an issue with creating the TRAIN scattered_future list")
                 
-                if whole_train_dataset is None:
-                    whole_train_dataset = batch_info['whole_dataset']
-            elif batch_info['type'] == 'eval':
-                # Handle evaluation data
-                #print("We are inside the IF/ELSE block for producing EVAL scatter.")
-                try:
-                    scattered_future = client.scatter(batch_info['data'])
-                    scattered_eval_data_futures.append(scattered_future)
-                except Exception as e:
-                    print("there was an issue with creating the EVAL scattererd_future list.")
-                    print(e)
-                    
+            if whole_train_dataset is None:
+                whole_train_dataset = batch_info['whole_dataset']
+        elif batch_info['type'] == 'eval':
+            # Handle evaluation data
+            #print("We are inside the IF/ELSE block for producing EVAL scatter.")
+            try:
+                scattered_future = client.scatter(batch_info['data'])
+                scattered_eval_data_futures.append(scattered_future)
+                print(f"Appended to eval futures: {len(scattered_eval_data_futures)}")  # Debugging output
+            except Exception as e:
+                print("there was an issue with creating the EVAL scattererd_future list.")
+                print(e)  
                 
-                if whole_eval_dataset is None:
-                    whole_eval_dataset = batch_info['whole_dataset']
+            if whole_eval_dataset is None:
+                whole_eval_dataset = batch_info['whole_dataset']
+        else:
+            print("There are paragraphs not being scattered.")
 
-            # Update the progress bar with the cumulative count of samples processed
-            #pbar.update(batch_info['cumulative_count'] - pbar.n)
-            pbar.update(len(batch_info['data']))
-
-        pbar.close()  # Ensure closure of the progress bar
+        # Update the progress bar with the cumulative count of samples processed
+        #pbar.update(batch_info['cumulative_count'] - pbar.n)
+        #pbar.update(len(batch_info['data']))
+    #persisted_eval_data_futures = client.persist(scattered_eval_data_futures)
+    #persisted_train_data_futures = client.persist(scattered_train_data_futures)
+    
+    #pbar.close()  # Ensure closure of the progress bar
 
     print(f"Completed creation of training and evaluation documents in {round((time() - started)/60,2)} minutes.\n")
-   
+    print(f"The size of the TRAIN scatter: {len(scattered_train_data_futures)}.")
+    print(f"The size of the EVAL scatter: {len(scattered_eval_data_futures)}.")
     print("Data scatter complete...\n")
     #garbage_collection(False, 'scattering training and eval data')
     #del scattered_future
@@ -1169,7 +1180,7 @@ if __name__=="__main__":
     # Select random_combinations conditionally
     random_combinations = random.sample(combinations, sample_size) if sample_size < len(combinations) else combinations
     #progress_bar = tqdm(total=len(random_combinations), desc="Creating and saving models")
-    progress_bar = tqdm(desc="Creating and saving models")
+    #progress_bar = tqdm(desc="Creating and saving models")
     print(f"The random sample combinations contains {len(random_combinations)}")
 
     # Determine which combinations were not drawn by using set difference
@@ -1183,11 +1194,13 @@ if __name__=="__main__":
     train_futures = []
     eval_futures = []
     
-    TOTAL_COMBINATIONS = len(random_combinations) * len(scattered_train_data_futures) * len(scattered_eval_data_futures)
-    progress_bar = tqdm(total=TOTAL_COMBINATIONS, desc="Creating and saving models")
+    #TOTAL_COMBINATIONS = len(random_combinations) * len(scattered_train_data_futures) + len(random_combinations) * len(scattered_eval_data_futures)
+    #progress_bar = tqdm(total=TOTAL_COMBINATIONS, desc="Creating and saving models")
     # Iterate over the combinations and submit tasks
+    num_iter = 0
     for n_topics, alpha_value, beta_value, train_eval_type in random_combinations:
-
+        print(f"this is the number of for loop iterations: {num_iter}")
+        num_iter+=1
         # determine if throttling is needed
         logging.info("\nEvaluating if adaptive throttling is necessary (method exponential backoff)...")
         started, throttle_attempt = time(), 0
@@ -1246,11 +1259,12 @@ if __name__=="__main__":
             
         # Check if it's time to process futures based on BATCH_SIZE
         train_eval_count = len(train_futures) + len(eval_futures)
+        print(f"This is the length of all of the data: {train_eval_count}")
         if train_eval_count >= BATCH_SIZE:
             time_of_vis_call = pd.to_datetime('now')
             time_of_vis_call = time_of_vis_call.strftime('%Y%m%d%H%M%S%f')
             PERFORMANCE_TRAIN_LOG = os.path.join(LOG_DIR, f"train_perf_{time_of_vis_call}.html")
-            del time_of_vis_call
+            #del time_of_vis_call
             with performance_report(filename=PERFORMANCE_TRAIN_LOG):
                 logging.info("In holding pattern until WAIT completes.")
                 started = time()
@@ -1288,11 +1302,9 @@ if __name__=="__main__":
                 #print(f"We have completed the EVAL list comprehension. The size is {len(completed_eval_futures)}")
                 #print(f"This is the length of the EVAL completed_eval_futures var {len(completed_eval_futures)}")
 
-            num_workers = len(client.scheduler_info()["workers"])
-            process_completed_futures(completed_train_futures, completed_eval_futures, num_workers, BATCH_SIZE, LOG_DIR)
                 
             #logging.info(f"This is the size of completed_train_futures {len(completed_train_futures)} and this is the size of completed_eval_futures {len(completed_eval_futures)}")
-            progress_bar.update(len(done))
+            #progress_bar.update(len(done))
 
             # Handle failed futures using the previously defined function
             for future in not_done:
@@ -1317,28 +1329,30 @@ if __name__=="__main__":
             else:
                 BATCH_SIZE = max(1, int(BATCH_SIZE * (1-DECREASE_FACTOR))) if max(1, int(BATCH_SIZE * (1-DECREASE_FACTOR))) < BATCH_SIZE else BATCH_SIZE
                 logging.info(f"Decreasing batch size to {BATCH_SIZE}")
-                garbage_collection(True, 'Batch Size Decrease')
+                #garbage_collection(True, 'Batch Size Decrease')
 
+            num_workers = len(client.scheduler_info()["workers"])
+            completed_eval_futures, completed_train_futures = process_completed_futures(completed_train_futures, completed_eval_futures, num_workers, BATCH_SIZE, LOG_DIR)
             #defensive programming to ensure WAIT output list of futures are empty
-            for f in done:
-                client.cancel(f)
-            for f in completed_train_futures:
-                client.cancel(f)
-            for f in completed_eval_futures:
-                client.cancel(f)
+            #for f in done:
+            #    client.cancel(f)
+            #for f in completed_train_futures:
+            #    client.cancel(f)
+            #for f in completed_eval_futures:
+            #    client.cancel(f)
             
-            del done, not_done, done_train, done_eval, not_done_eval, not_done_train 
-            garbage_collection(True,'End of a batch being processed.')
-            client.rebalance()
+           # del done, not_done, done_train, done_eval, not_done_eval, not_done_train 
+            #garbage_collection(True,'End of a batch being processed.')
+            #client.rebalance()
          
     #garbage_collection(False, "Cleaning WAIT -> done, not_done")     
-    progress_bar.close()
+    #progress_bar.close()
 
     # After all loops have finished running...
     if len(train_futures) > 0 or len(eval_futures) > 0:
         print("we are in the first IF statement for retry_processing()")
         retry_processing(train_futures, eval_futures, TIMEOUT)
-    del train_futures, eval_futures
+    #del train_futures, eval_futures
 
     # Now give one more chance with extended timeout only to those that were incomplete previously
     if len(failed_model_params) > 0:
@@ -1400,13 +1414,13 @@ if __name__=="__main__":
 
 #%%
 
-    import pandas as pd
-    import pyarrow.parquet as pa
+#    import pandas as pd
+#    import pyarrow.parquet as pa
 
     # Uncomment the next two lines if you want to view the file's schema.
     # parquetFile = pa.ParquetFile('test.parquet')
     # print(parquetFile.schema)
 
-    df = pd.read_parquet(r'C:\_harvester\data\lda-models\2010s_html\metadata\metadata.parquet')
-    df.to_csv(r'C:\_harvester\data\lda-models\2010s_html\metadata\metadata-09242024.csv', sep=';')
+    #df = pd.read_parquet(r'C:\_harvester\data\lda-models\2010s_html\metadata\metadata.parquet')
+    #df.to_csv(r'C:\_harvester\data\lda-models\2010s_html\metadata\metadata-09242024.csv', sep=';')
 
