@@ -77,7 +77,7 @@ now = datetime.now()
 #       %m is the two-digit month (01-12)
 #       %H%M is the hour (00-23) followed by minute (00-59) in 24hr format
 #log_filename = now.strftime('log-%w-%m-%Y-%H%M.log')
-log_filename = 'log.log'
+log_filename = 'log-0830.log'
 LOGFILE = os.path.join(LOG_DIRECTORY,log_filename)
 
 # Configure logging to write to a file with this name
@@ -220,7 +220,7 @@ import zipfile
 
 # Define the top-level directory and subdirectories
 DECADE = DECADE_TO_PROCESS
-ROOT_DIR = f"C:/_harvester/data/lda-models/{DECADE}_html"
+ROOT_DIR = f"C:/_harvester/data/lda-models/{DECADE}"
 LOG_DIR = os.path.join(ROOT_DIR, "log")
 IMAGE_DIR = os.path.join(ROOT_DIR, "visuals")
 PYLDA_DIR = os.path.join(IMAGE_DIR, 'pyLDAvis')
@@ -1032,7 +1032,6 @@ def handle_failed_future(future, future_to_params, train_futures, eval_futures, 
 # https://distributed.dask.org/en/latest/worker-memory.html#memory-not-released-back-to-the-os
 from tqdm import tqdm
 if __name__=="__main__":
-
     cluster = LocalCluster(
             n_workers=CORES,
             threads_per_worker=THREADS_PER_CORE,
@@ -1089,7 +1088,7 @@ if __name__=="__main__":
     scattered_train_data_futures = []
     scattered_eval_data_futures = []
 
-    total_num_samples = get_num_records(DATA_SOURCE)
+    total_num_samples = 0
 
     whole_train_dataset = None
     whole_eval_dataset = None
@@ -1097,6 +1096,7 @@ if __name__=="__main__":
     with tqdm(total=total_num_samples) as pbar:
         # Process each batch as it is generated
         for batch_info in futures_create_lda_datasets(DATA_SOURCE, TRAIN_RATIO):
+            total_num_samples += 1
             if batch_info['type'] == 'train':
                 # Handle training data
                 #print("We are inside the IF/ELSE block for producing TRAIN scatter.")
@@ -1183,6 +1183,8 @@ if __name__=="__main__":
     train_futures = []
     eval_futures = []
     
+    TOTAL_COMBINATIONS = len(random_combinations) * len(scattered_train_data_futures) * len(scattered_eval_data_futures)
+    progress_bar = tqdm(total=TOTAL_COMBINATIONS, desc="Creating and saving models")
     # Iterate over the combinations and submit tasks
     for n_topics, alpha_value, beta_value, train_eval_type in random_combinations:
 
@@ -1288,102 +1290,6 @@ if __name__=="__main__":
 
             num_workers = len(client.scheduler_info()["workers"])
             process_completed_futures(completed_train_futures, completed_eval_futures, num_workers, BATCH_SIZE, LOG_DIR)
- 
-            """
-            ########################
-            # PROCESS VISUALIZATIONS
-            ########################
-            time_of_vis_call = pd.to_datetime('now')
-            time_of_vis_call = time_of_vis_call.strftime('%Y%m%d%H%M%S%f')
-            PERFORMANCE_TRAIN_LOG = os.path.join(IMAGE_DIR, f"vis_perf_{time_of_vis_call}.html")
-            del time_of_vis_call
-            with performance_report(filename=PERFORMANCE_TRAIN_LOG):
-                logging.info("\nIn holding pattern until process TRAIN and EVAL visualizations completes.")
-                started = time()
-                # To get the results from the completed futures
-                logging.info("Gathering DONE_TRAIN futures.")
-                results = [d.result() for d in done_train if  isinstance(d, Future)]       
-                logging.info("Completed gathering DONE_TRAIN futures.") 
-                if len(results) != len(done_train):
-                    logging.error("All DONE TRAIN futures could not be resolved.")
-
-                # Now you can process these results and submit new tasks based on them
-                create_visualizations = []
-                for r in results:
-                    for result in r:
-                        # Process your result here and define a new task based on it
-                        new_task = client.submit(create_vis, pickle.loads(result['lda_model']), \
-                                                    hashlib.md5(result['time'].strftime('%Y%m%d%H%M%S%f').encode()).hexdigest(), \
-                                                    pickle.loads(result['corpus']), \
-                                                    pickle.loads(result['dictionary'])   )
-                        create_visualizations.append(new_task)
-
-                logging.info("Executing WAIT on TRAIN create_visualizations futures.")
-                done_new_tasks, not_done_new_tasks = wait(create_visualizations)
-                if len(not_done_new_tasks) > 0:
-                    logging.error(f"All TRAIN visualizations couldn't be generated. There were {len(not_done_new_tasks)} not created.")
-
-                # Gather the results from the completed visualization tasks
-                logging.info("Gathering completed TRAIN visualization results futures.")
-                completed_visualization_results = client.gather(done_new_tasks)
-                #del completed_visualization_results
-                logging.info("Completed gathering TRAIN visualization results futures.")
-
-                #defensive programming to ensure WAIT output list of futures are empty
-                for f in done_train:
-                    client.cancel(f)
-                for f in create_visualizations:
-                    client.cancel(f)
-                for f in completed_visualization_results:
-                    client.cancel(f)
-
-
-                # create visualizations for evaluation data
-                logging.info("Gathering DONE_EVAL futures.")
-                results = [d.result() for d in done_eval if isinstance(d, Future)]           
-                logging.info("Complted gathering DONE_EVAL futures.")  
-                if len(results) != len(done_eval):
-                    logging.error("All DONE EVAL futures could not be resolved.")
-
-                # Now you can process these results and submit new tasks based on them
-                create_visualizations = []
-                for r in results:
-                    for result in r:
-                        # Process your result here and define a new task based on it
-                        new_task = client.submit(create_vis, pickle.loads(result['lda_model']), \
-                                                    hashlib.md5(result['time'].strftime('%Y%m%d%H%M%S%f').encode()).hexdigest(), \
-                                                    pickle.loads(result['corpus']), \
-                                                    pickle.loads(result['dictionary'])   )
-                        create_visualizations.append(new_task)
-
-                logging.info("Executing WAIT on EVAL create_visualizations futures.")
-                done_new_tasks, not_done_new_tasks = wait(create_visualizations)
-                if len(not_done_new_tasks) > 0:
-                    logging.error(f"All EVAL visualizations couldn't be generated. There were {len(not_done_new_tasks)} not created.")
-
-                # Gather the results from the completed visualization tasks
-                logging.info("Gathering completed EVAL visualization results futures.")
-                completed_visualization_results = client.gather(done_new_tasks)
-                #del completed_visualization_results
-                logging.info("Completed gathering EVAL visualization results futures.")
-
-                #defensive programming to ensure WAIT output list of futures are empty
-                for f in done_eval:
-                    client.cancel(f)
-                for f in done_new_tasks:
-                    client.cancel(f)
-                for f in results:
-                    client.cancel(f)
-                for f in completed_visualization_results:
-                    client.cancel(f)             
-
-                elapsed_time = round(((time() - started) / 60), 2)
-                logging.info(f"Create visualizations for TRAIN and EVAL data completed in {elapsed_time} minutes")
-            # close performance report encapsulation of visualization performance analysis
-            """
-            #############################
-            # END PROCESS VISUALIZATIONS
-            #############################
                 
             #logging.info(f"This is the size of completed_train_futures {len(completed_train_futures)} and this is the size of completed_eval_futures {len(completed_eval_futures)}")
             progress_bar.update(len(done))
@@ -1421,10 +1327,9 @@ if __name__=="__main__":
             for f in completed_eval_futures:
                 client.cancel(f)
             
-            del done, not_done, done_train, done_eval, not_done_eval, not_done_train
-            #del create_visualizations, done_new_tasks, not_done_new_tasks, new_task, results, completed_visualization_results
-            client.rebalance() 
+            del done, not_done, done_train, done_eval, not_done_eval, not_done_train 
             garbage_collection(True,'End of a batch being processed.')
+            client.rebalance()
          
     #garbage_collection(False, "Cleaning WAIT -> done, not_done")     
     progress_bar.close()
