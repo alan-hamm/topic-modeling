@@ -58,7 +58,7 @@ from distributed import get_worker
 import gc
 import hashlib
 import pickle
-
+import numpy as np
 
 #%%
 
@@ -265,14 +265,11 @@ def save_to_zip(time, text_data, text_json, ldamodel, corpus, dictionary):
     # Write the text content and model to a zip file within TEXTS_ZIP_DIR
     zip_path = os.path.join(TEXTS_ZIP_DIR, text_zip_filename)
     with zipfile.ZipFile(zip_path, mode='w', compression=zipfile.ZIP_DEFLATED) as zf:
-        zf.writestr(f"doc_{text_zip_filename}.txt", text_data)
-        ldamodel_bytes = pickle.dumps(ldamodel)
-        corpus_bytes = pickle.dumps(corpus)
-        dictionary_bytes = pickle.dumps(dictionary)
+        zf.writestr(f"doc_{timestamp_str}.txt", text_data)
         zf.writestr(f"model_{timestamp_str}.pkl", ldamodel)
         zf.writestr(f"dict_{timestamp_str}.pkl", dictionary)
         zf.writestr(f"corpus_{timestamp_str}.pkl", corpus)
-        zf.writestr(f"json_{text_json}.pkl", text_json)
+        zf.writestr(f"json_{timestamp_str}.pkl", text_json)
     return zip_path
 
 # method to deserialize and return the LDA model object
@@ -290,7 +287,7 @@ def load_pkl_from_zip(zip_path):
 
 # Function to add new model data to metadata Parquet file
 def add_model_data_to_metadata(model_data, workers, batchsize):
-    #print("we are in the add_model_data_to_metadata method()")
+    print("we are in the add_model_data_to_metadata method()")
     # Save large body of text to zip and update model_data reference
     texts_zipped = []
     
@@ -342,6 +339,7 @@ def add_model_data_to_metadata(model_data, workers, batchsize):
         #'create_pylda': bool, 
         #'create_pcoa': bool, 
         # Enforce datetime type for time
+        'end_time': 'datetime64[ns]',
         'time': 'datetime64[ns]',
     }   
 
@@ -356,7 +354,7 @@ def add_model_data_to_metadata(model_data, workers, batchsize):
         # Apply type conversion selectively
         #for col_name in ['convergence', 'perplexity', 'coherence', 'n_beta', 'n_alpha']:
         for col_name in ['convergence', 'perplexity', 'coherence', 'n_beta', 'n_alpha']:
-            df_new_metadata[col_name] = df_new_metadata[col_name].astype('float64')
+            df_new_metadata[col_name] = df_new_metadata[col_name].astype('float32')
             
         df_new_metadata['topics'] = df_new_metadata['topics'].astype(int)
         #df_new_metadata['time'] = pd.to_datetime(df_new_metadata['time'])
@@ -805,6 +803,11 @@ def train_model(n_topics: int, alpha_str: list, beta_str: list, data: list, trai
         if isinstance(alpha_str, float):
             alpha_str = str(alpha_str)   
 
+        # get time to complete function
+        time_to_complete = (datetime.now() - time_of_method_call).total_seconds()
+        #formatted_time = time_to_complete.strftime("%H:%M:%S.%f")
+
+        # add key for MD5 of json file(same as you did with text_md5)
         current_increment_data = {
                 'type': train_eval,
                 'num_workers': 0, # this value is set to 0 which will signify an error in assignment of adaptive-scaling worker count assigned in process_completed()
@@ -832,6 +835,7 @@ def train_model(n_topics: int, alpha_str: list, beta_str: list, data: list, trai
                 'lda_model': ldamodel_bytes,
                 'corpus': pickle.dumps(corpus_batch),
                 'dictionary': pickle.dumps(dictionary_batch),
+                'end_time': pd.to_datetime('now'),
                 'time': time_of_method_call
         }
 
@@ -860,7 +864,7 @@ failed_model_params = []
 # Mapping from futures to their corresponding parameters (n_topics, alpha_value, beta_value)
 future_to_params = {}
 def process_completed_futures(completed_train_futures, completed_eval_futures, workers, batchsize, log_dir):
-    #print("we are in the process_completed_futures method()")
+    print("we are in the process_completed_futures method()")
     # Process training futures
     #vis_futures = []
     for future in completed_train_futures:
@@ -951,7 +955,6 @@ def process_completed_futures(completed_train_futures, completed_eval_futures, w
                     
     #del models_data            
     #garbage_collection(True, 'process_completed_futures(...)')
-    return completed_eval_futures, completed_train_futures
 
 
 # Function to retry processing with incomplete futures
@@ -1108,7 +1111,7 @@ if __name__=="__main__":
             try:
                 scattered_future = client.scatter(batch_info['data'])
                 scattered_train_data_futures.append(scattered_future)
-                print(f"Appended to train futures: {len(scattered_train_data_futures)}") # Debugging output
+                #print(f"Appended to train futures: {len(scattered_train_data_futures)}") # Debugging output
             except Exception as e:
                 print("there was an issue with creating the TRAIN scattered_future list")
                 
@@ -1120,7 +1123,7 @@ if __name__=="__main__":
             try:
                 scattered_future = client.scatter(batch_info['data'])
                 scattered_eval_data_futures.append(scattered_future)
-                print(f"Appended to eval futures: {len(scattered_eval_data_futures)}")  # Debugging output
+                #print(f"Appended to eval futures: {len(scattered_eval_data_futures)}")  # Debugging output
             except Exception as e:
                 print("there was an issue with creating the EVAL scattererd_future list.")
                 print(e)  
@@ -1133,14 +1136,12 @@ if __name__=="__main__":
         # Update the progress bar with the cumulative count of samples processed
         #pbar.update(batch_info['cumulative_count'] - pbar.n)
         #pbar.update(len(batch_info['data']))
-    #persisted_eval_data_futures = client.persist(scattered_eval_data_futures)
-    #persisted_train_data_futures = client.persist(scattered_train_data_futures)
     
     #pbar.close()  # Ensure closure of the progress bar
 
     print(f"Completed creation of training and evaluation documents in {round((time() - started)/60,2)} minutes.\n")
-    print(f"The size of the TRAIN scatter: {len(scattered_train_data_futures)}.")
-    print(f"The size of the EVAL scatter: {len(scattered_eval_data_futures)}.")
+    #print(f"The size of the TRAIN scatter: {len(scattered_train_data_futures)}.")
+    #print(f"The size of the EVAL scatter: {len(scattered_eval_data_futures)}.")
     print("Data scatter complete...\n")
     #garbage_collection(False, 'scattering training and eval data')
     #del scattered_future
@@ -1194,12 +1195,12 @@ if __name__=="__main__":
     train_futures = []
     eval_futures = []
     
-    #TOTAL_COMBINATIONS = len(random_combinations) * len(scattered_train_data_futures) + len(random_combinations) * len(scattered_eval_data_futures)
-    #progress_bar = tqdm(total=TOTAL_COMBINATIONS, desc="Creating and saving models")
+    TOTAL_COMBINATIONS = len(random_combinations) * (len(scattered_train_data_futures) + len(scattered_eval_data_futures) )
+    progress_bar = tqdm(total=TOTAL_COMBINATIONS, desc="Creating and saving models")
     # Iterate over the combinations and submit tasks
     num_iter = 0
     for n_topics, alpha_value, beta_value, train_eval_type in random_combinations:
-        print(f"this is the number of for loop iterations: {num_iter}")
+        #print(f"this is the number of for loop iterations: {num_iter}")
         num_iter+=1
         # determine if throttling is needed
         logging.info("\nEvaluating if adaptive throttling is necessary (method exponential backoff)...")
@@ -1222,7 +1223,7 @@ if __name__=="__main__":
 
         if throttle_attempt == MAX_RETRIES:
             logging.error("Maximum retries reached. The workers are still above the CPU or Memory threshold.")
-            garbage_collection(True, 'Max Retries - throttling attempt')
+            garbage_collection(False, 'Max Retries - throttling attempt')
         else:
             logging.info("Proceeding with workload as workers are below the CPU and Memory thresholds.")
 
@@ -1259,7 +1260,7 @@ if __name__=="__main__":
             
         # Check if it's time to process futures based on BATCH_SIZE
         train_eval_count = len(train_futures) + len(eval_futures)
-        print(f"This is the length of all of the data: {train_eval_count}")
+        #print(f"This is the length of all of the data: {train_eval_count}")
         if train_eval_count >= BATCH_SIZE:
             time_of_vis_call = pd.to_datetime('now')
             time_of_vis_call = time_of_vis_call.strftime('%Y%m%d%H%M%S%f')
@@ -1287,24 +1288,21 @@ if __name__=="__main__":
                     
                 elapsed_time = round(((time() - started) / 60), 2)
                 logging.info(f"WAIT completed in {elapsed_time} minutes")
-                print(f"This is the size of DONE {len(done)}. And this is the size of NOT_DONE {len(not_done)}\n")
+                #print(f"This is the size of DONE {len(done)}. And this is the size of NOT_DONE {len(not_done)}\n")
                 #print(f"this is the value of done_train {done_train}")
 
                 # Now clear references to these completed futures by filtering them out of your lists
                 train_futures = [f for f in train_futures if f not in done_train]
                 eval_futures = [f for f in eval_futures if f not in done_eval]
                 
-                completed_train_futures = [f for f in done_train]
+                completed_train_futures = [f for f in train_futures]
                 #print(f"We have completed the TRAIN list comprehension. The size is {len(completed_train_futures)}")
                 #print(f"This is the length of the TRAIN completed_train_futures var {len(completed_train_futures)}")
                 
-                completed_eval_futures = [f for f in done_eval]
+                completed_eval_futures = [f for f in eval_futures]
                 #print(f"We have completed the EVAL list comprehension. The size is {len(completed_eval_futures)}")
                 #print(f"This is the length of the EVAL completed_eval_futures var {len(completed_eval_futures)}")
 
-                
-            #logging.info(f"This is the size of completed_train_futures {len(completed_train_futures)} and this is the size of completed_eval_futures {len(completed_eval_futures)}")
-            #progress_bar.update(len(done))
 
             # Handle failed futures using the previously defined function
             for future in not_done:
@@ -1332,21 +1330,26 @@ if __name__=="__main__":
                 #garbage_collection(True, 'Batch Size Decrease')
 
             num_workers = len(client.scheduler_info()["workers"])
-            completed_eval_futures, completed_train_futures = process_completed_futures(completed_train_futures, completed_eval_futures, num_workers, BATCH_SIZE, LOG_DIR)
+            process_completed_futures(completed_train_futures, completed_eval_futures, num_workers, BATCH_SIZE, LOG_DIR)
+            progress_bar.update(len(done))
             #defensive programming to ensure WAIT output list of futures are empty
-            #for f in done:
-            #    client.cancel(f)
-            #for f in completed_train_futures:
-            #    client.cancel(f)
-            #for f in completed_eval_futures:
-            #    client.cancel(f)
+            for f in done:
+                client.cancel(f)
+            for f in completed_train_futures:
+                client.cancel(f)
+            for f in completed_eval_futures:
+                client.cancel(f)
+            for f in done_train:
+                client.cancel(f)
+            for f in done_eval:
+                client.cancel(f)
             
-           # del done, not_done, done_train, done_eval, not_done_eval, not_done_train 
-            #garbage_collection(True,'End of a batch being processed.')
-            #client.rebalance()
+            del done, not_done, done_train, done_eval, not_done_eval, not_done_train 
+            garbage_collection(False,'End of a batch being processed.')
+            client.rebalance()
          
     #garbage_collection(False, "Cleaning WAIT -> done, not_done")     
-    #progress_bar.close()
+    progress_bar.close()
 
     # After all loops have finished running...
     if len(train_futures) > 0 or len(eval_futures) > 0:
