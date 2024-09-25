@@ -287,7 +287,7 @@ def load_pkl_from_zip(zip_path):
 
 # Function to add new model data to metadata Parquet file
 def add_model_data_to_metadata(model_data, workers, batchsize):
-    print("we are in the add_model_data_to_metadata method()")
+    #print("we are in the add_model_data_to_metadata method()")
     # Save large body of text to zip and update model_data reference
     texts_zipped = []
     
@@ -864,10 +864,11 @@ failed_model_params = []
 # Mapping from futures to their corresponding parameters (n_topics, alpha_value, beta_value)
 future_to_params = {}
 def process_completed_futures(completed_train_futures, completed_eval_futures, workers, batchsize, log_dir):
-    print("we are in the process_completed_futures method()")
+    #print("we are in the process_completed_futures method()")
     # Process training futures
     #vis_futures = []
     for future in completed_train_futures:
+        #print("we are in the process_completed_futures method()")
         try:
             # Retrieve the result of the training future
             #if isinstance(future.result(), list):
@@ -897,6 +898,7 @@ def process_completed_futures(completed_train_futures, completed_eval_futures, w
                         #future = client.submit(create_vis, pickle.loads(model_data['lda_model']), model_data['text_md5'], model_data['corpus_batch'], model_data['dictionary_batch'])
                         #vis_futures.append(future)
                         #add_model_data_to_metadata(model_data, pylda_success, pcoa_success, batchsize)
+                        #print("we are in the process_completed_futures method()")
                         add_model_data_to_metadata(model_data, workers, batchsize)
                     # Gather all results (this will trigger computation).
                     #vis_results = client.gather(vis_futures)
@@ -955,6 +957,7 @@ def process_completed_futures(completed_train_futures, completed_eval_futures, w
                     
     #del models_data            
     #garbage_collection(True, 'process_completed_futures(...)')
+    return completed_eval_futures, completed_train_futures
 
 
 # Function to retry processing with incomplete futures
@@ -1295,11 +1298,11 @@ if __name__=="__main__":
                 train_futures = [f for f in train_futures if f not in done_train]
                 eval_futures = [f for f in eval_futures if f not in done_eval]
                 
-                completed_train_futures = [f for f in train_futures]
+                completed_train_futures = [f for f in done_train]
                 #print(f"We have completed the TRAIN list comprehension. The size is {len(completed_train_futures)}")
                 #print(f"This is the length of the TRAIN completed_train_futures var {len(completed_train_futures)}")
                 
-                completed_eval_futures = [f for f in eval_futures]
+                completed_eval_futures = [f for f in done_eval]
                 #print(f"We have completed the EVAL list comprehension. The size is {len(completed_eval_futures)}")
                 #print(f"This is the length of the EVAL completed_eval_futures var {len(completed_eval_futures)}")
 
@@ -1330,22 +1333,22 @@ if __name__=="__main__":
                 #garbage_collection(True, 'Batch Size Decrease')
 
             num_workers = len(client.scheduler_info()["workers"])
-            process_completed_futures(completed_train_futures, completed_eval_futures, num_workers, BATCH_SIZE, LOG_DIR)
+            completed_eval_futures, completed_train_futures = process_completed_futures(completed_train_futures, completed_eval_futures, num_workers, BATCH_SIZE, LOG_DIR)
             progress_bar.update(len(done))
             #defensive programming to ensure WAIT output list of futures are empty
             for f in done:
                 client.cancel(f)
-            for f in completed_train_futures:
-                client.cancel(f)
-            for f in completed_eval_futures:
-                client.cancel(f)
+            #for f in completed_train_futures:
+            #    client.cancel(f)
+            #for f in completed_eval_futures:
+            #    client.cancel(f)
             for f in done_train:
                 client.cancel(f)
             for f in done_eval:
                 client.cancel(f)
             
             del done, not_done, done_train, done_eval, not_done_eval, not_done_train 
-            garbage_collection(False,'End of a batch being processed.')
+            #garbage_collection(False,'End of a batch being processed.')
             client.rebalance()
          
     #garbage_collection(False, "Cleaning WAIT -> done, not_done")     
