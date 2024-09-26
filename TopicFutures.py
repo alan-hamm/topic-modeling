@@ -309,6 +309,7 @@ def add_model_data_to_metadata(model_data, num_documents, workers, batchsize):
                
     # Define the expected data types for each column
     expected_dtypes = {
+        'time_key': str, 
         'type': str,
         'num_workers': int,
         'batch_size': int,
@@ -339,8 +340,8 @@ def add_model_data_to_metadata(model_data, num_documents, workers, batchsize):
         'lda_model': object,
         'corpus': object,
         'dictionary': object,
-        #'create_pylda': bool, 
-        #'create_pcoa': bool, 
+        'create_pylda': bool, 
+        'create_pcoa': bool, 
         # Enforce datetime type for time
         'end_time': 'datetime64[ns]',
         'time': 'datetime64[ns]',
@@ -590,10 +591,10 @@ def create_vis(ldaModel, filename, corpus, dictionary):
     create_pylda = False
     create_pcoa = False
     PCoAfilename = filename
-    filename = filename + '.html'
+    #print("We are inside Create Vis.")
     
 
-    IMAGEFILE = os.path.join(PYLDA_DIR,filename)
+    IMAGEFILE = os.path.join(PYLDA_DIR,f"{filename}.html")
     PCoAIMAGEFILE = os.path.join(PCOA_DIR, PCoAfilename)
 
     # Disable notebook mode since we're saving to HTML.
@@ -609,17 +610,20 @@ def create_vis(ldaModel, filename, corpus, dictionary):
 
     except Exception as e:
         logging.error(f"The pyLDAvis HTML could not be saved: {e}")
-        create_pylda = False
 
 
     # try Jensen-Shannon Divergence & Principal Coordinate Analysis (aka Classical Multidimensional Scaling)
+    topic_labels = [] # list to store topic labels
+
     topic_distributions = [ldaModel.get_document_topics(doc, minimum_probability=0) for doc in corpus]
 
     # Ensure all topics are represented even if their probability is 0
     num_topics = ldaModel.num_topics
     distributions_matrix = np.zeros((len(corpus), num_topics))
 
+    # apply topic labels and extract distribution matrix
     for i, doc_topics in enumerate(topic_distributions):
+        topic_labels.append(f"Topic {max(doc_topics, key=lambda x: x[1])[0]}")
         for topic_num, prob in doc_topics:
             distributions_matrix[i, topic_num] = prob
     
@@ -633,30 +637,43 @@ def create_vis(ldaModel, filename, corpus, dictionary):
         # Create a figure and an axes instance
         fig, ax = plt.subplots(figsize=(10, 10))
 
-        # Create a scatter plot of the PCoA results
-        ax.scatter(x, y)
+        # Generate unique colors for each topic label using a colormap
+        unique_labels = list(set(topic_labels))
+        colors = plt.cm.jet(np.linspace(0, 1, len(unique_labels)))
+        
+        # Create a mapping from topic labels to colors
+        label_to_color = dict(zip(unique_labels, colors))
+
+        # Plot each point and assign it the color based on its label.
+        scatter_plots = {}
+        
+        for i in range(len(x)):
+            if topic_labels[i] not in scatter_plots:
+                scatter_plots[topic_labels[i]] = ax.scatter(x[i], y[i], color=label_to_color[topic_labels[i]], label=topic_labels[i])
+            else:
+                ax.scatter(x[i], y[i], color=label_to_color[topic_labels[i]])
 
         # Set title and labels for axes
         ax.set_title('PCoA Results')
         ax.set_xlabel('PC1')
         ax.set_ylabel('PC2')
 
-        # Save the figure as an image file
-        fig.savefig(f'{PCoAIMAGEFILE}.jpg')
+        # Add legend outside the plot to avoid covering data points.
+        ax.legend(loc='center left', bbox_to_anchor=(1.04, 0.5), borderaxespad=0)
+
+        # Save the figure as an image file with additional padding to accommodate the legend.
+        fig.savefig(f'{PCoAIMAGEFILE}.jpg', bbox_inches='tight')
 
         # Close the figure to free up memory
-        plt.close('all')
-        plt.cla()
-        plt.clf()
-        #garbage_collection(True,'Create Vis')
-        
+        plt.close(fig)
+
         create_pcoa = True
+
     except Exception as e: 
         logging.error(f"An error occurred during PCoA transformation: {e}")
-        create_pcoa = False
 
 
-    return create_pylda, create_pcoa
+    return filename, create_pylda, create_pcoa
 
 
 
@@ -671,7 +688,6 @@ def train_model(n_topics: int, alpha_str: list, beta_str: list, data: list, trai
         models_data = []
         coherehce_score_list = []
         corpus_batch = []
-        zipped_texts = []
         time_of_method_call = pd.to_datetime('now')
 
         #print("this is an investigation into the full datafile")
@@ -813,6 +829,7 @@ def train_model(n_topics: int, alpha_str: list, beta_str: list, data: list, trai
 
         # add key for MD5 of json file(same as you did with text_md5)
         current_increment_data = {
+                'time_key': hashlib.md5(time_of_method_call.strftime('%Y%m%d%H%M%S%f').encode()).hexdigest(),
                 'type': train_eval,
                 'num_workers': 0, # this value is set to 0 which will signify an error in assignment of adaptive-scaling worker count assigned in process_completed()
                 'batch_size': BATCH_SIZE,
@@ -840,6 +857,8 @@ def train_model(n_topics: int, alpha_str: list, beta_str: list, data: list, trai
                 'lda_model': ldamodel_bytes,
                 'corpus': pickle.dumps(corpus_batch),
                 'dictionary': pickle.dumps(dictionary_batch),
+                'create_pylda': None, 
+                'create_pcoa': None, 
                 'end_time': pd.to_datetime('now'),
                 'time': time_of_method_call
         }
@@ -868,97 +887,58 @@ failed_model_params = []
 
 # Mapping from futures to their corresponding parameters (n_topics, alpha_value, beta_value)
 future_to_params = {}
-def process_completed_futures(completed_train_futures, completed_eval_futures, num_documents, workers, batchsize, log_dir):
-    #print("we are in the process_completed_futures method()")
+def process_completed_futures(completed_train_futures, completed_eval_futures, num_documents, workers, \
+                               batchsize, log_dir, visualization_results=None):
+
+    # Create a mapping from model_data_id to visualization results
+    vis_results_map = {vis_result[0]: vis_result[1:] for vis_result in visualization_results}
+    if visualization_results and len(visualization_results) >= 2:
+        print(visualization_results[0], visualization_results[1])
+    #print(f"this is the vis_results_map(): {vis_results_map}")
+
     # Process training futures
-    #vis_futures = []
     for future in completed_train_futures:
-        #print("we are in the process_completed_futures method()")
         try:
-            # Retrieve the result of the training future
-            #if isinstance(future.result(), list):
             models_data = future.result()  # This should be a list of dictionaries
             if not isinstance(models_data, list):
-                models_data = list(future.result())  # This should be a list of dictionaries
-            #logging.info(f"this is the value of the TRAIN MODELS_DATA within the process_completed method: {models_data}")
-            #else:
-            #    models_data = list(future.result())
-            #print("this is the value of models data:", models_data)
-            
-        except TypeError as e:
-            logging.error(f"Error occurred during training: {e}")
-            #sys.exit()
-        else:
-            # Iterate over each model's data and save it
-            #for model_data in models_data:
-                # Check if models_data is a non-empty list before iterating
-                if isinstance(models_data, list) and models_data:
-                    for model_data in models_data:
-                        #logging.info(f"this is the value of model TRAIN data: {model_data}")
-                        #save_model_and_log(model_data=model_data, log_dir=log_dir, train_or_eval=True)
-                        #pylda_success, pcoa_success = create_vis(pickle.loads(model_data['lda_model']), \
-                        #           hashlib.md5(model_data['time'].strftime('%Y%m%d%H%M%S%f').encode()).hexdigest(), 
-                        #           pickle.loads(model_data['corpus']), 
-                        #           pickle.loads(model_data['dictionary']))
-                        #future = client.submit(create_vis, pickle.loads(model_data['lda_model']), model_data['text_md5'], model_data['corpus_batch'], model_data['dictionary_batch'])
-                        #vis_futures.append(future)
-                        #add_model_data_to_metadata(model_data, pylda_success, pcoa_success, batchsize)
-                        #print("we are in the process_completed_futures method()")
-                        add_model_data_to_metadata(model_data, num_documents, workers, batchsize)
-                    # Gather all results (this will trigger computation).
-                    #vis_results = client.gather(vis_futures)
+                models_data = [models_data]  # Ensure it is a list
 
-                    # If there are any delayed objects within results (like from create_vis),
-                    # compute them here. This will block until all visualizations are created.
-                    #dask.compute(*vis_results)
-                    #vis_futures.clear()
-                    #vis_results.clear()
-                else:
-                    # Handle the case where models_data is not as expected
-                    logging.error(f"Received unexpected result from TRAIN future: {models_data}")
+            for model_data in models_data:
+                unique_id = model_data['time_key']
+                
+                # Retrieve visualization results using filename hash as key
+                if unique_id in vis_results_map:
+                    print(f"We are in the process_completed mapping time hash key.")
+                    create_pylda, create_pcoa = vis_results_map[unique_id]
+                    model_data['create_pylda'] = create_pylda
+                    model_data['create_pcoa'] = create_pcoa
+                
+                add_model_data_to_metadata(model_data, num_documents, workers, batchsize)
+        except Exception as e:
+            logging.error(f"Error occurred during process_completed_futures() TRAIN: {e}")
+        
 
     # Process evaluation futures
     #vis_futures = []
     for future in completed_eval_futures:
         try:
-            # Retrieve the result of the training future
-            #if isinstance(future.result(), list):
             models_data = future.result()  # This should be a list of dictionaries
             if not isinstance(models_data, list):
-                models_data = list(future.result())  # This should be a list of dictionaries
-            #logging.info(f"this is the value of the EVAL MODELS_DATA within the process_completed method: {models_data}")
-            #else:
-            #    models_data = list(future.result())
-            #print("this is the value of models data:", models_data)
-        except TypeError as e:
-            logging.error(f"Error occurred during evaluation: {e}")
-            sys.exit()
-        else:
-            # Iterate over each model's data and save it
-            #for model_data in models_data:
-                # Check if models_data is a non-empty list before iterating
-                if isinstance(models_data, list) and models_data:
-                    for model_data in models_data:
-                        #logging.info(f"this is the value of model EVAL data: {model_data}")
-                        #save_model_and_log(model_data=model_data, log_dir=log_dir, train_or_eval=False)
-                        #pylda_success, pcoa_success = create_vis(pickle.loads(model_data['lda_model']), \
-                        #           hashlib.md5(model_data['time'].strftime('%Y%m%d%H%M%S%f').encode()).hexdigest(), 
-                        #           pickle.loads(model_data['corpus']), 
-                        #           pickle.loads(model_data['dictionary']))
-                        #future = client.submit(create_vis, pickle.loads(model_data['lda_model']), model_data['text_md5'], model_data['corpus_batch'], model_data['dictionary_batch'])
-                        #vis_futures.append(future)
-                        add_model_data_to_metadata(model_data, num_documents, workers, batchsize)
-                    # Gather all results (this will trigger computation).
-                    #vis_results = client.gather(vis_futures)
+                models_data = [models_data]  # Ensure it is a list
 
-                    # If there are any delayed objects within results (like from create_vis),
-                    # compute them here. This will block until all visualizations are created.
-                    #dask.compute(*vis_results)
-                    #vis_futures.clear()
-                    #vis_results.clear()
-                else:
-                    # Handle the case where models_data is not as expected
-                    logging.error(f"Received unexpected result from EVAL future: {models_data}")
+            for model_data in models_data:
+                unique_id = model_data['time']
+                
+                # Retrieve visualization results using filename hash as key
+                if unique_id in vis_results_map:
+                    create_pylda, create_pcoa = vis_results_map[unique_id]
+                    model_data['create_pylda'] = create_pylda
+                    model_data['create_pcoa'] = create_pcoa
+                
+                add_model_data_to_metadata(model_data, num_documents, workers, batchsize)
+        except Exception as e:
+            logging.error(f"Error occurred during process_completed_futures() EVAL: {e}")
+        
                     
     #del models_data            
     #garbage_collection(True, 'process_completed_futures(...)')
@@ -1330,10 +1310,59 @@ if __name__=="__main__":
                 elapsed_time = round(((time() - started) / 60), 2)
                 logging.error(f"It took {elapsed_time} minutes to handle {len(train_futures)} train futures and {len(eval_futures)} evaluation futures the failed future.")
 
+        
+            ########################
+            # PROCESS VISUALIZATIONS
+            ########################
+            time_of_vis_call = pd.to_datetime('now')
+            time_of_vis_call = time_of_vis_call.strftime('%Y%m%d%H%M%S%f')
+            PERFORMANCE_TRAIN_LOG = os.path.join(IMAGE_DIR, f"vis_perf_{time_of_vis_call}.html")
+            del time_of_vis_call
+            with performance_report(filename=PERFORMANCE_TRAIN_LOG):
+                logging.info("In holding pattern until process TRAIN and EVAL visualizations completes.")
+                started = time()
+                # To get the results from the completed futures
+                logging.info("Gathering futures.")
+                results_train = [d.result() for d in done_train if  isinstance(d, Future)]       
+                results_eval = [d.result() for d in done_eval if  isinstance(d, Future)]       
+                results = results_train + results_eval
+                logging.info(f"Completed gathering {len(results)} futures.") 
+                if len(results) != (len(done_train) + len(done_eval)):
+                    logging.error(f"All DONE({len(results)}) futures could not be resolved.")
 
-            # If no tasks are pending (i.e., all have been processed), consider increasing BATCH_SIZE.
-            #completed_tasks += len(done_train) + len(done_eval)
+                # Now you can process these results and submit new tasks based on them
+                visualization_futures = []
+                #results = completed_train_futures + completed_eval_futures
+                for r in results:
+                    for result in r:
+                        # Process your result here and define a new task based on it
+                        vis_future = client.submit(create_vis, pickle.loads(result['lda_model']), \
+                                                        hashlib.md5(result['time'].strftime('%Y%m%d%H%M%S%f').encode()).hexdigest(), \
+                                                        pickle.loads(result['corpus']), \
+                                                        pickle.loads(result['dictionary'])   )
+                        visualization_futures.append(vis_future)
 
+                logging.info(f"Executing WAIT on TRAIN create_visualizations {len(visualization_futures)} futures.")
+                # Wait for all visualization tasks to complete
+                done_visualizations, not_done_visualizations = wait(visualization_futures)
+                if len(not_done_visualizations) > 0:
+                    logging.error(f"All TRAIN visualizations couldn't be generated. There were {len(not_done_visualizations)} not created.")
+
+                # Gather the results from the completed visualization tasks
+                logging.info("Gathering completed visualization results futures.")
+                completed_visualization_results = [future.result() for future in done_visualizations]
+                #del completed_visualization_results
+                logging.info(f"Completed gathering {len(completed_visualization_results)} visualization results futures.")
+
+                elapsed_time = round(((time() - started) / 60), 2)
+                logging.info(f"Create visualizations for TRAIN and EVAL data completed in {elapsed_time} minutes")
+                #print(f"Create visualizations for TRAIN and EVAL data completed in {elapsed_time} minutes")
+            # close performance report encapsulation of visualization performance analysis
+
+            #############################
+            # END PROCESS VISUALIZATIONS
+            #############################            
+            
             # monitor system resource usage and adjust batch size accordingly
             scheduler_info = client.scheduler_info()
             all_workers_below_cpu_threshold = all(worker['metrics']['cpu'] < CPU_UTILIZATION_THRESHOLD for worker in scheduler_info['workers'].values())
@@ -1347,130 +1376,29 @@ if __name__=="__main__":
                 logging.info(f"Decreasing batch size to {BATCH_SIZE}")
                 #garbage_collection(True, 'Batch Size Decrease')
 
+            print(f"the length of the completed visualization results: {len(completed_visualization_results)}")
             num_workers = len(client.scheduler_info()["workers"])
             completed_eval_futures, completed_train_futures = process_completed_futures(completed_train_futures, \
                                                                                         completed_eval_futures, \
                                                                                         (len(completed_eval_futures)+len(completed_train_futures)), \
                                                                                         num_workers, \
                                                                                         BATCH_SIZE, \
-                                                                                        LOG_DIR)
-            
-                
-            ########################
-            # PROCESS VISUALIZATIONS
-            ########################
-            time_of_vis_call = pd.to_datetime('now')
-            time_of_vis_call = time_of_vis_call.strftime('%Y%m%d%H%M%S%f')
-            PERFORMANCE_TRAIN_LOG = os.path.join(IMAGE_DIR, f"vis_perf_{time_of_vis_call}.html")
-            del time_of_vis_call
-            with performance_report(filename=PERFORMANCE_TRAIN_LOG):
-                logging.info("\nIn holding pattern until process TRAIN and EVAL visualizations completes.")
-                started = time()
-                # To get the results from the completed futures
-                logging.info("Gathering DONE_TRAIN futures.")
-                results = [d.result() for d in done_train if  isinstance(d, Future)]       
-                logging.info("Completed gathering DONE_TRAIN futures.") 
-                if len(results) != len(done_train):
-                    logging.error("All DONE TRAIN futures could not be resolved.")
-
-                # Now you can process these results and submit new tasks based on them
-                create_visualizations = []
-                for r in results:
-                    for result in r:
-                        # Process your result here and define a new task based on it
-                        new_task = client.submit(create_vis, pickle.loads(result['lda_model']), \
-                                                    hashlib.md5(result['time'].strftime('%Y%m%d%H%M%S%f').encode()).hexdigest(), \
-                                                    pickle.loads(result['corpus']), \
-                                                    pickle.loads(result['dictionary'])   )
-                        create_visualizations.append(new_task)
-
-                logging.info("Executing WAIT on TRAIN create_visualizations futures.")
-                done_new_tasks, not_done_new_tasks = wait(create_visualizations)
-                if len(not_done_new_tasks) > 0:
-                    logging.error(f"All TRAIN visualizations couldn't be generated. There were {len(not_done_new_tasks)} not created.")
-
-                # Gather the results from the completed visualization tasks
-                logging.info("Gathering completed TRAIN visualization results futures.")
-                completed_visualization_results = client.gather(done_new_tasks)
-                #del completed_visualization_results
-                logging.info("Completed gathering TRAIN visualization results futures.")
-
-                #defensive programming to ensure WAIT output list of futures are empty
-                for f in done_train:
-                    client.cancel(f)
-                for f in create_visualizations:
-                    client.cancel(f)
-                for f in completed_visualization_results:
-                    client.cancel(f)
-
-
-                # create visualizations for evaluation data
-                logging.info("Gathering DONE_EVAL futures.")
-                results = [d.result() for d in done_eval if isinstance(d, Future)]           
-                logging.info("Complted gathering DONE_EVAL futures.")  
-                if len(results) != len(done_eval):
-                    logging.error("All DONE EVAL futures could not be resolved.")
-
-                # Now you can process these results and submit new tasks based on them
-                create_visualizations = []
-                for r in results:
-                    for result in r:
-                        # Process your result here and define a new task based on it
-                        new_task = client.submit(create_vis, pickle.loads(result['lda_model']), \
-                                                    hashlib.md5(result['time'].strftime('%Y%m%d%H%M%S%f').encode()).hexdigest(), \
-                                                    pickle.loads(result['corpus']), \
-                                                    pickle.loads(result['dictionary'])   )
-                        create_visualizations.append(new_task)
-
-                logging.info("Executing WAIT on EVAL create_visualizations futures.")
-                done_new_tasks, not_done_new_tasks = wait(create_visualizations)
-                if len(not_done_new_tasks) > 0:
-                    logging.error(f"All EVAL visualizations couldn't be generated. There were {len(not_done_new_tasks)} not created.")
-
-                # Gather the results from the completed visualization tasks
-                logging.info("Gathering completed EVAL visualization results futures.")
-                completed_visualization_results = client.gather(done_new_tasks)
-                #del completed_visualization_results
-                logging.info("Completed gathering EVAL visualization results futures.")
-
-                #defensive programming to ensure WAIT output list of futures are empty
-                for f in done_eval:
-                    client.cancel(f)
-                for f in done_new_tasks:
-                    client.cancel(f)
-                for f in results:
-                    client.cancel(f)
-                for f in completed_visualization_results:
-                    client.cancel(f)             
-
-                elapsed_time = round(((time() - started) / 60), 2)
-                logging.info(f"Create visualizations for TRAIN and EVAL data completed in {elapsed_time} minutes")
-            # close performance report encapsulation of visualization performance analysis
-
-            #############################
-            # END PROCESS VISUALIZATIONS
-            #############################            
-            
-            
+                                                                                        LOG_DIR, \
+                                                                                        visualization_results=completed_visualization_results)
+             
             progress_bar.update(len(done))
 
             #defensive programming to ensure WAIT output list of futures are empty
-            for f in done:
-                client.cancel(f)
-            #for f in completed_train_futures:
-            #    client.cancel(f)
-            #for f in completed_eval_futures:
-            #    client.cancel(f)
-            #for f in done_train:
-            #    client.cancel(f)
-            #for f in done_eval:
-            #    client.cancel(f)
-            for f in train_futures:
-                client.cancel(f)
-            for f in eval_futures:
-                client.cancel(f)
+            for f in done: client.cancel(f)
+            for f in done_train: client.cancel(f)
+            for f in completed_visualization_results: client.cancel(f)
+            for f in visualization_futures: client.cancel(f)
+            for f in done_visualizations: client.cancel(f)
+            for f in not_done_visualizations: client.cancel(f)
+
             
-            del done, not_done, done_train, done_eval, not_done_eval, not_done_train 
+            del done, not_done, done_train, done_eval, not_done_eval, not_done_train
+            del visualization_futures, done_visualizations, not_done_visualizations
             garbage_collection(False,'End of a batch being processed.')
             client.rebalance()
          
@@ -1481,7 +1409,10 @@ if __name__=="__main__":
     if len(train_futures) > 0 or len(eval_futures) > 0:
         print("we are in the first IF statement for retry_processing()")
         retry_processing(train_futures, eval_futures, TIMEOUT)
-    #del train_futures, eval_futures
+    
+    #defensive programming to ensure WAIT output list of futures are empty
+    for f in train_futures: client.cancel(f)
+    for f in eval_futures: client.cancel(f)
 
     # Now give one more chance with extended timeout only to those that were incomplete previously
     if len(failed_model_params) > 0:
@@ -1543,15 +1474,15 @@ if __name__=="__main__":
 
 #%%
 
-#import pandas as pd
-#import pyarrow.parquet as pa
+import pandas as pd
+import pyarrow.parquet as pa
 
 # Uncomment the next two lines if you want to view the file's schema.
-# parquetFile = pa.ParquetFile('test.parquet')
+#parquetFile = pa.ParquetFile('test.parquet')
 # print(parquetFile.schema)
 
 #df = pd.read_parquet(r'C:\_harvester\data\lda-models\2010-2014\metadata\metadata.parquet')
-#df.to_csv(r'C:\_harvester\data\lda-models\2010-2014\metadata-09242024a.csv', sep=';')
+#df.to_csv(r'C:\_harvester\data\lda-models\2010-2014\metadata-09262024c.csv', sep=';')
 
 
 # %%
