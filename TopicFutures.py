@@ -6,10 +6,12 @@
 
 
 #%%
-#import pyLDAvis.gensim  # Library for interactive topic model visualization
-#import pyLDAvis.gensim_models as gensimvis
-#import matplotlib.pyplot as plt
-#from mpld3 import save_html
+import pyLDAvis.gensim  # Library for interactive topic model visualization
+import pyLDAvis.gensim_models as gensimvis
+import matplotlib.pyplot as plt
+import matplotlib
+matplotlib.use('Agg')
+from mpld3 import save_html
 
 
 from tqdm import tqdm  # Creates progress bars to visualize the progress of loops or tasks
@@ -130,15 +132,15 @@ DECADE = DECADE_TO_PROCESS
 CORES = 8
 MAXIMUM_CORES = 12
 
-THREADS_PER_CORE = 8
+THREADS_PER_CORE = 10
 
-RAM_MEMORY_LIMIT = "16GB" 
+RAM_MEMORY_LIMIT = "50GB" # Dask significantly overestimates RAM usage -- nowhere near OS RAM measurement
 
-CPU_UTILIZATION_THRESHOLD = 125 # eg 85%
-MEMORY_UTILIZATION_THRESHOLD = 12 * (1024 ** 3)  # Convert GB to bytes
+CPU_UTILIZATION_THRESHOLD = 110 # eg 85%
+MEMORY_UTILIZATION_THRESHOLD = 47 * (1024 ** 3)  # Convert GB to bytes
 
 # Specify the local directory path, spilling will be written here
-DASK_DIR = '/_harvester/tmp-dask-out'
+DASK_DIR = '/_harvester/dask-spill'
 
 # specify the number of passes for Gensim LdaModel
 PASSES = 15
@@ -286,7 +288,7 @@ def load_pkl_from_zip(zip_path):
     return loaded_pkl
 
 # Function to add new model data to metadata Parquet file
-def add_model_data_to_metadata(model_data, workers, batchsize):
+def add_model_data_to_metadata(model_data, num_documents, workers, batchsize):
     #print("we are in the add_model_data_to_metadata method()")
     # Save large body of text to zip and update model_data reference
     texts_zipped = []
@@ -310,6 +312,7 @@ def add_model_data_to_metadata(model_data, workers, batchsize):
         'type': str,
         'num_workers': int,
         'batch_size': int,
+        'num_documents': int,
         'text': object,  # Use object dtype for lists of strings (file paths)
         'text_json': object,
         'text_sha256': str,
@@ -360,6 +363,7 @@ def add_model_data_to_metadata(model_data, workers, batchsize):
         #df_new_metadata['time'] = pd.to_datetime(df_new_metadata['time'])
         df_new_metadata['batch_size'] = batchsize
         df_new_metadata['num_workers'] = workers
+        df_new_metadata['num_documents'] = num_documents
         #df_new_metadata['create_pylda'] = pylda_success
         #df_new_metadata['create_pcoa'] = pcoa_success
         # drop lda model from dataframe
@@ -593,7 +597,7 @@ def create_vis(ldaModel, filename, corpus, dictionary):
     PCoAIMAGEFILE = os.path.join(PCOA_DIR, PCoAfilename)
 
     # Disable notebook mode since we're saving to HTML.
-    pyLDAvis.disable_notebook()
+    #pyLDAvis.disable_notebook()
     
     # Prepare the visualization data.
     # Note: sort_topics=False will prevent reordering topics after training.
@@ -812,6 +816,7 @@ def train_model(n_topics: int, alpha_str: list, beta_str: list, data: list, trai
                 'type': train_eval,
                 'num_workers': 0, # this value is set to 0 which will signify an error in assignment of adaptive-scaling worker count assigned in process_completed()
                 'batch_size': BATCH_SIZE,
+                'num_documents': 0, 
                 'text': [string_result],
                 'text_json': pickle.dumps(batch_documents),
                 'text_sha256': hashlib.sha256(string_result.encode()).hexdigest(),
@@ -863,7 +868,7 @@ failed_model_params = []
 
 # Mapping from futures to their corresponding parameters (n_topics, alpha_value, beta_value)
 future_to_params = {}
-def process_completed_futures(completed_train_futures, completed_eval_futures, workers, batchsize, log_dir):
+def process_completed_futures(completed_train_futures, completed_eval_futures, num_documents, workers, batchsize, log_dir):
     #print("we are in the process_completed_futures method()")
     # Process training futures
     #vis_futures = []
@@ -899,7 +904,7 @@ def process_completed_futures(completed_train_futures, completed_eval_futures, w
                         #vis_futures.append(future)
                         #add_model_data_to_metadata(model_data, pylda_success, pcoa_success, batchsize)
                         #print("we are in the process_completed_futures method()")
-                        add_model_data_to_metadata(model_data, workers, batchsize)
+                        add_model_data_to_metadata(model_data, num_documents, workers, batchsize)
                     # Gather all results (this will trigger computation).
                     #vis_results = client.gather(vis_futures)
 
@@ -942,7 +947,7 @@ def process_completed_futures(completed_train_futures, completed_eval_futures, w
                         #           pickle.loads(model_data['dictionary']))
                         #future = client.submit(create_vis, pickle.loads(model_data['lda_model']), model_data['text_md5'], model_data['corpus_batch'], model_data['dictionary_batch'])
                         #vis_futures.append(future)
-                        add_model_data_to_metadata(model_data, workers, batchsize)
+                        add_model_data_to_metadata(model_data, num_documents, workers, batchsize)
                     # Gather all results (this will trigger computation).
                     #vis_results = client.gather(vis_futures)
 
@@ -1192,6 +1197,16 @@ if __name__=="__main__":
 
     print(f"this leaves {len(undrawn_combinations)} undrawn combinations\n")
 
+    # clear utility vars
+    for f in train_combinations:
+        client.cancel(f)
+    for f in eval_combinations:
+        client.cancel(f)
+    for f in random_train_combinations:
+        client.cancel(f)
+    for f in random_eval_combinations:
+        client.cancel(f)
+
     # number of futures that complete in WAIT method
     #completed_tasks = 0
     # Create empty lists to store all future objects for training and evaluation
@@ -1249,12 +1264,12 @@ if __name__=="__main__":
 
 
         # Map the created futures to their parameters so we can identify them later if needed
-        for future in train_futures:
-            future_to_params[future] = ('train',n_topics, alpha_value, beta_value)
+        #for future in train_futures:
+        #    future_to_params[future] = ('train',n_topics, alpha_value, beta_value)
 
         # Do the same for eval_futures
-        for future in eval_futures:
-            future_to_params[future] = ('eval', n_topics, alpha_value, beta_value)
+        #for future in eval_futures:
+        #    future_to_params[future] = ('eval', n_topics, alpha_value, beta_value)
 
         #train_futures.append(all_train_futures)
         #eval_futures.append(all_eval_futures)
@@ -1333,8 +1348,112 @@ if __name__=="__main__":
                 #garbage_collection(True, 'Batch Size Decrease')
 
             num_workers = len(client.scheduler_info()["workers"])
-            completed_eval_futures, completed_train_futures = process_completed_futures(completed_train_futures, completed_eval_futures, num_workers, BATCH_SIZE, LOG_DIR)
+            completed_eval_futures, completed_train_futures = process_completed_futures(completed_train_futures, \
+                                                                                        completed_eval_futures, \
+                                                                                        (len(completed_eval_futures)+len(completed_train_futures)), \
+                                                                                        num_workers, \
+                                                                                        BATCH_SIZE, \
+                                                                                        LOG_DIR)
+            
+                
+            ########################
+            # PROCESS VISUALIZATIONS
+            ########################
+            time_of_vis_call = pd.to_datetime('now')
+            time_of_vis_call = time_of_vis_call.strftime('%Y%m%d%H%M%S%f')
+            PERFORMANCE_TRAIN_LOG = os.path.join(IMAGE_DIR, f"vis_perf_{time_of_vis_call}.html")
+            del time_of_vis_call
+            with performance_report(filename=PERFORMANCE_TRAIN_LOG):
+                logging.info("\nIn holding pattern until process TRAIN and EVAL visualizations completes.")
+                started = time()
+                # To get the results from the completed futures
+                logging.info("Gathering DONE_TRAIN futures.")
+                results = [d.result() for d in done_train if  isinstance(d, Future)]       
+                logging.info("Completed gathering DONE_TRAIN futures.") 
+                if len(results) != len(done_train):
+                    logging.error("All DONE TRAIN futures could not be resolved.")
+
+                # Now you can process these results and submit new tasks based on them
+                create_visualizations = []
+                for r in results:
+                    for result in r:
+                        # Process your result here and define a new task based on it
+                        new_task = client.submit(create_vis, pickle.loads(result['lda_model']), \
+                                                    hashlib.md5(result['time'].strftime('%Y%m%d%H%M%S%f').encode()).hexdigest(), \
+                                                    pickle.loads(result['corpus']), \
+                                                    pickle.loads(result['dictionary'])   )
+                        create_visualizations.append(new_task)
+
+                logging.info("Executing WAIT on TRAIN create_visualizations futures.")
+                done_new_tasks, not_done_new_tasks = wait(create_visualizations)
+                if len(not_done_new_tasks) > 0:
+                    logging.error(f"All TRAIN visualizations couldn't be generated. There were {len(not_done_new_tasks)} not created.")
+
+                # Gather the results from the completed visualization tasks
+                logging.info("Gathering completed TRAIN visualization results futures.")
+                completed_visualization_results = client.gather(done_new_tasks)
+                #del completed_visualization_results
+                logging.info("Completed gathering TRAIN visualization results futures.")
+
+                #defensive programming to ensure WAIT output list of futures are empty
+                for f in done_train:
+                    client.cancel(f)
+                for f in create_visualizations:
+                    client.cancel(f)
+                for f in completed_visualization_results:
+                    client.cancel(f)
+
+
+                # create visualizations for evaluation data
+                logging.info("Gathering DONE_EVAL futures.")
+                results = [d.result() for d in done_eval if isinstance(d, Future)]           
+                logging.info("Complted gathering DONE_EVAL futures.")  
+                if len(results) != len(done_eval):
+                    logging.error("All DONE EVAL futures could not be resolved.")
+
+                # Now you can process these results and submit new tasks based on them
+                create_visualizations = []
+                for r in results:
+                    for result in r:
+                        # Process your result here and define a new task based on it
+                        new_task = client.submit(create_vis, pickle.loads(result['lda_model']), \
+                                                    hashlib.md5(result['time'].strftime('%Y%m%d%H%M%S%f').encode()).hexdigest(), \
+                                                    pickle.loads(result['corpus']), \
+                                                    pickle.loads(result['dictionary'])   )
+                        create_visualizations.append(new_task)
+
+                logging.info("Executing WAIT on EVAL create_visualizations futures.")
+                done_new_tasks, not_done_new_tasks = wait(create_visualizations)
+                if len(not_done_new_tasks) > 0:
+                    logging.error(f"All EVAL visualizations couldn't be generated. There were {len(not_done_new_tasks)} not created.")
+
+                # Gather the results from the completed visualization tasks
+                logging.info("Gathering completed EVAL visualization results futures.")
+                completed_visualization_results = client.gather(done_new_tasks)
+                #del completed_visualization_results
+                logging.info("Completed gathering EVAL visualization results futures.")
+
+                #defensive programming to ensure WAIT output list of futures are empty
+                for f in done_eval:
+                    client.cancel(f)
+                for f in done_new_tasks:
+                    client.cancel(f)
+                for f in results:
+                    client.cancel(f)
+                for f in completed_visualization_results:
+                    client.cancel(f)             
+
+                elapsed_time = round(((time() - started) / 60), 2)
+                logging.info(f"Create visualizations for TRAIN and EVAL data completed in {elapsed_time} minutes")
+            # close performance report encapsulation of visualization performance analysis
+
+            #############################
+            # END PROCESS VISUALIZATIONS
+            #############################            
+            
+            
             progress_bar.update(len(done))
+
             #defensive programming to ensure WAIT output list of futures are empty
             for f in done:
                 client.cancel(f)
@@ -1342,13 +1461,17 @@ if __name__=="__main__":
             #    client.cancel(f)
             #for f in completed_eval_futures:
             #    client.cancel(f)
-            for f in done_train:
+            #for f in done_train:
+            #    client.cancel(f)
+            #for f in done_eval:
+            #    client.cancel(f)
+            for f in train_futures:
                 client.cancel(f)
-            for f in done_eval:
+            for f in eval_futures:
                 client.cancel(f)
             
             del done, not_done, done_train, done_eval, not_done_eval, not_done_train 
-            #garbage_collection(False,'End of a batch being processed.')
+            garbage_collection(False,'End of a batch being processed.')
             client.rebalance()
          
     #garbage_collection(False, "Cleaning WAIT -> done, not_done")     
@@ -1380,8 +1503,8 @@ if __name__=="__main__":
             retry_eval_futures.append(future_eval_retry)
 
             # Keep track of these new futures as well
-            future_to_params[future_train_retry] = params
-            future_to_params[future_eval_retry] = params
+            #future_to_params[future_train_retry] = params
+            #future_to_params[future_eval_retry] = params
 
         # Clear the list of failed model parameters before reattempting
         failed_model_params.clear()
@@ -1397,8 +1520,8 @@ if __name__=="__main__":
         #progress_bar.update(len(done))
 
         # Record parameters of still incomplete futures after reattempting for later review
-        for future in not_done:
-            failed_model_params.append(future_to_params[future])
+        #for future in not_done:
+        #    failed_model_params.append(future_to_params[future])
 
         # At this point `failed_model_params` contains the parameters of all models that didn't complete even after a retry
 
@@ -1420,13 +1543,15 @@ if __name__=="__main__":
 
 #%%
 
-#    import pandas as pd
-#    import pyarrow.parquet as pa
+#import pandas as pd
+#import pyarrow.parquet as pa
 
-    # Uncomment the next two lines if you want to view the file's schema.
-    # parquetFile = pa.ParquetFile('test.parquet')
-    # print(parquetFile.schema)
+# Uncomment the next two lines if you want to view the file's schema.
+# parquetFile = pa.ParquetFile('test.parquet')
+# print(parquetFile.schema)
 
-    #df = pd.read_parquet(r'C:\_harvester\data\lda-models\2010s_html\metadata\metadata.parquet')
-    #df.to_csv(r'C:\_harvester\data\lda-models\2010s_html\metadata\metadata-09242024.csv', sep=';')
+#df = pd.read_parquet(r'C:\_harvester\data\lda-models\2010-2014\metadata\metadata.parquet')
+#df.to_csv(r'C:\_harvester\data\lda-models\2010-2014\metadata-09242024a.csv', sep=';')
 
+
+# %%
