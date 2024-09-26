@@ -588,8 +588,8 @@ def futures_create_lda_datasets(filename, train_ratio, batch_size=FUTURES_BATCH_
 
 #@dask.delayed
 def create_vis(ldaModel, filename, corpus, dictionary):
-    create_pylda = False
-    create_pcoa = False
+    create_pylda = None
+    create_pcoa = None
     PCoAfilename = filename
     #print("We are inside Create Vis.")
     
@@ -908,7 +908,7 @@ def process_completed_futures(completed_train_futures, completed_eval_futures, n
                 
                 # Retrieve visualization results using filename hash as key
                 if unique_id in vis_results_map:
-                    print(f"We are in the process_completed mapping time hash key.")
+                    #print(f"We are in the process_completed mapping time hash key.")
                     create_pylda, create_pcoa = vis_results_map[unique_id]
                     model_data['create_pylda'] = create_pylda
                     model_data['create_pcoa'] = create_pcoa
@@ -1322,11 +1322,11 @@ if __name__=="__main__":
                 logging.info("In holding pattern until process TRAIN and EVAL visualizations completes.")
                 started = time()
                 # To get the results from the completed futures
-                logging.info("Gathering futures.")
+                logging.info("Gathering TRAIN and EVAL futures.")
                 results_train = [d.result() for d in done_train if  isinstance(d, Future)]       
                 results_eval = [d.result() for d in done_eval if  isinstance(d, Future)]       
                 results = results_train + results_eval
-                logging.info(f"Completed gathering {len(results)} futures.") 
+                logging.info(f"Completed TRAIN and EVAL gathering {len(results)} futures.") 
                 if len(results) != (len(done_train) + len(done_eval)):
                     logging.error(f"All DONE({len(results)}) futures could not be resolved.")
 
@@ -1342,17 +1342,17 @@ if __name__=="__main__":
                                                         pickle.loads(result['dictionary'])   )
                         visualization_futures.append(vis_future)
 
-                logging.info(f"Executing WAIT on TRAIN create_visualizations {len(visualization_futures)} futures.")
+                logging.info(f"Executing WAIT on TRAIN and EVAL create_visualizations {len(visualization_futures)} futures.")
                 # Wait for all visualization tasks to complete
                 done_visualizations, not_done_visualizations = wait(visualization_futures)
                 if len(not_done_visualizations) > 0:
-                    logging.error(f"All TRAIN visualizations couldn't be generated. There were {len(not_done_visualizations)} not created.")
+                    logging.error(f"All TRAIN and EVAL visualizations couldn't be generated. There were {len(not_done_visualizations)} not created.")
 
                 # Gather the results from the completed visualization tasks
-                logging.info("Gathering completed visualization results futures.")
+                logging.info("Gathering TRAIN and EVAL completed visualization results futures.")
                 completed_visualization_results = [future.result() for future in done_visualizations]
                 #del completed_visualization_results
-                logging.info(f"Completed gathering {len(completed_visualization_results)} visualization results futures.")
+                logging.info(f"Completed gathering {len(completed_visualization_results)} TRAIN and EVAL visualization results futures.")
 
                 elapsed_time = round(((time() - started) / 60), 2)
                 logging.info(f"Create visualizations for TRAIN and EVAL data completed in {elapsed_time} minutes")
@@ -1482,7 +1482,7 @@ import pyarrow.parquet as pa
 # print(parquetFile.schema)
 
 #df = pd.read_parquet(r'C:\_harvester\data\lda-models\2010-2014\metadata\metadata.parquet')
-#df.to_csv(r'C:\_harvester\data\lda-models\2010-2014\metadata-09262024c.csv', sep=';')
+#df.to_csv(r'C:\_harvester\data\lda-models\2010-2014\metadata-09262024d.csv', sep=';')
 
 
 # %%
