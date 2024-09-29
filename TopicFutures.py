@@ -1,3 +1,6 @@
+# PAIR programming with chatCDC
+# author Alan Hamm
+# date apr 2024
 
 #%%
 #import sys
@@ -6,19 +9,22 @@
 
 
 #%%
+import pyLDAvis
 import pyLDAvis.gensim  # Library for interactive topic model visualization
 import pyLDAvis.gensim_models as gensimvis
 import matplotlib.pyplot as plt
 import matplotlib
 matplotlib.use('Agg')
-from mpld3 import save_html
+# Set max_open_warning to 0 to suppress the warning
+plt.rcParams['figure.max_open_warning'] = 0 # suppress memory warning msgs re too many plots being open simultaneously
+from mpld3 import save_html # used to save PCoA plots as HTML files
 
 
 from tqdm import tqdm  # Creates progress bars to visualize the progress of loops or tasks
 from gensim.models import LdaModel  # Implements LDA for topic modeling using the Gensim library
 from gensim.corpora import Dictionary  # Represents a collection of text documents as a bag-of-words corpus
 from gensim.models import CoherenceModel  # Computes coherence scores for topic models
-import pyLDAvis
+
 import IProgress 
 import os  # Provides functions for interacting with the operating system, such as creating directories
 import itertools  # Provides various functions for efficient iteration and combination of elements
@@ -52,22 +58,23 @@ from dask.delayed import Delayed # Decorator for creating delayed objects in Das
 from dask.bag import Bag
 from dask import delayed
 from dask import persist
-
 import dask.config
-#from dask.distributed import wait
 from dask.distributed import performance_report, wait, as_completed #,print
 from distributed import get_worker
+
 import gc
 import hashlib
 import pickle
-import numpy as np
+
+from statistics import mean
+
 
 #%%
 
 import logging
 from datetime import datetime
 
-DECADE_TO_PROCESS ='2010-2014'
+DECADE_TO_PROCESS ='2020-2024'
 LOG_DIRECTORY = f"C:/_harvester/data/lda-models/{DECADE_TO_PROCESS}/log/"
 # Ensure the LOG_DIRECTORY exists
 os.makedirs(LOG_DIRECTORY, exist_ok=True)
@@ -81,7 +88,7 @@ now = datetime.now()
 #       %m is the two-digit month (01-12)
 #       %H%M is the hour (00-23) followed by minute (00-59) in 24hr format
 #log_filename = now.strftime('log-%w-%m-%Y-%H%M.log')
-log_filename = 'log-0900.log'
+log_filename = 'log-0945.log'
 LOGFILE = os.path.join(LOG_DIRECTORY,log_filename)
 
 # Configure logging to write to a file with this name
@@ -132,12 +139,12 @@ DECADE = DECADE_TO_PROCESS
 CORES = 8
 MAXIMUM_CORES = 12
 
-THREADS_PER_CORE = 10
+THREADS_PER_CORE = 12
 
-RAM_MEMORY_LIMIT = "50GB" # Dask significantly overestimates RAM usage -- nowhere near OS RAM measurement
+RAM_MEMORY_LIMIT = "100GB" # Dask diagnostics significantly overestimates RAM usage -- nowhere near OS RAM measurement
 
 CPU_UTILIZATION_THRESHOLD = 110 # eg 85%
-MEMORY_UTILIZATION_THRESHOLD = 47 * (1024 ** 3)  # Convert GB to bytes
+MEMORY_UTILIZATION_THRESHOLD = 97 * (1024 ** 3)  # Convert GB to bytes
 
 # Specify the local directory path, spilling will be written here
 DASK_DIR = '/_harvester/dask-spill'
@@ -164,12 +171,13 @@ PER_WORD_TOPICS = True
 NUM_DOCUMENTS = 25
 
 # the number of documents to read from the JSON source file per batch
-FUTURES_BATCH_SIZE = 100
+FUTURES_BATCH_SIZE = 75
 
 # Constants for adaptive batching and retries
 # Number of futures to process per iteration
-BATCH_SIZE = 100 # number of documents, value must be greater than FUTURES_BATCH_SIZE
-MAX_BATCH_SIZE = 150 
+BATCH_SIZE = 80 # number of documents, value must be greater than FUTURES_BATCH_SIZE
+MAX_BATCH_SIZE = 125
+MIN_BATCH_SIZE = math.ceil(FUTURES_BATCH_SIZE * 1.01)
 INCREASE_FACTOR = 1.05  # Increase batch size by p% upon success
 DECREASE_FACTOR = .10 # Decrease batch size by p% upon failure or timeout
 MAX_RETRIES = 5        # Maximum number of retries per task
@@ -177,7 +185,7 @@ BASE_WAIT_TIME = 30     # Base wait time in seconds for exponential backoff
 
 
 # Load data from the JSON file
-DATA_SOURCE = "C:/_harvester/data/tokenized-sentences/10s/2010-2014_min_six_word-w-bigrams.json"
+DATA_SOURCE = "C:/_harvester/data/tokenized-sentences/2020-2024/2020-2024_min_six_word-w-bigrams.json"
 TRAIN_RATIO = .80
 
 TIMEOUT = None #"90 minutes"
@@ -343,8 +351,8 @@ def add_model_data_to_metadata(model_data, num_documents, workers, batchsize):
         'create_pylda': bool, 
         'create_pcoa': bool, 
         # Enforce datetime type for time
-        'end_time': 'datetime64[ns]',
         'time': 'datetime64[ns]',
+        'end_time': 'datetime64[ns]',
     }   
 
     
@@ -610,6 +618,7 @@ def create_vis(ldaModel, filename, corpus, dictionary):
 
     except Exception as e:
         logging.error(f"The pyLDAvis HTML could not be saved: {e}")
+        create_pylda = False
 
 
     # try Jensen-Shannon Divergence & Principal Coordinate Analysis (aka Classical Multidimensional Scaling)
@@ -671,6 +680,7 @@ def create_vis(ldaModel, filename, corpus, dictionary):
 
     except Exception as e: 
         logging.error(f"An error occurred during PCoA transformation: {e}")
+        create_pcoa=False
 
 
     return filename, create_pylda, create_pcoa
@@ -859,8 +869,8 @@ def train_model(n_topics: int, alpha_str: list, beta_str: list, data: list, trai
                 'dictionary': pickle.dumps(dictionary_batch),
                 'create_pylda': None, 
                 'create_pcoa': None, 
+                'time': time_of_method_call,
                 'end_time': pd.to_datetime('now'),
-                'time': time_of_method_call
         }
 
         models_data.append(current_increment_data)
@@ -892,8 +902,10 @@ def process_completed_futures(completed_train_futures, completed_eval_futures, n
 
     # Create a mapping from model_data_id to visualization results
     vis_results_map = {vis_result[0]: vis_result[1:] for vis_result in visualization_results}
-    if visualization_results and len(visualization_results) >= 2:
-        print(visualization_results[0], visualization_results[1])
+
+    # DEBUGGING
+    #if visualization_results and len(visualization_results) >= 2:
+    #    print(visualization_results[0], visualization_results[1])
     #print(f"this is the vis_results_map(): {vis_results_map}")
 
     # Process training futures
@@ -1255,7 +1267,10 @@ if __name__=="__main__":
         #eval_futures.append(all_eval_futures)
         #print(f"This is the size of the eval_futures {len(eval_futures)}")
         #print(f"this is the eval futures: {eval_futures}\n\n")
-            
+        
+        # list to contain create vis elapsed time. if > than mean or median then use min batch size
+        elapsed_time_list = []
+
         # Check if it's time to process futures based on BATCH_SIZE
         train_eval_count = len(train_futures) + len(eval_futures)
         #print(f"This is the length of all of the data: {train_eval_count}")
@@ -1363,20 +1378,8 @@ if __name__=="__main__":
             # END PROCESS VISUALIZATIONS
             #############################            
             
-            # monitor system resource usage and adjust batch size accordingly
-            scheduler_info = client.scheduler_info()
-            all_workers_below_cpu_threshold = all(worker['metrics']['cpu'] < CPU_UTILIZATION_THRESHOLD for worker in scheduler_info['workers'].values())
-            all_workers_below_memory_threshold = all(worker['metrics']['memory'] < MEMORY_UTILIZATION_THRESHOLD for worker in scheduler_info['workers'].values())
 
-            if (all_workers_below_cpu_threshold and all_workers_below_memory_threshold):
-                BATCH_SIZE = int(math.ceil(BATCH_SIZE * INCREASE_FACTOR)) if int(math.ceil(BATCH_SIZE * INCREASE_FACTOR)) < MAX_BATCH_SIZE else MAX_BATCH_SIZE
-                logging.info(f"Increasing batch size to {BATCH_SIZE}")
-            else:
-                BATCH_SIZE = max(1, int(BATCH_SIZE * (1-DECREASE_FACTOR))) if max(1, int(BATCH_SIZE * (1-DECREASE_FACTOR))) < BATCH_SIZE else BATCH_SIZE
-                logging.info(f"Decreasing batch size to {BATCH_SIZE}")
-                #garbage_collection(True, 'Batch Size Decrease')
-
-            print(f"the length of the completed visualization results: {len(completed_visualization_results)}")
+            #print(f"the length of the completed visualization results: {len(completed_visualization_results)}")
             num_workers = len(client.scheduler_info()["workers"])
             completed_eval_futures, completed_train_futures = process_completed_futures(completed_train_futures, \
                                                                                         completed_eval_futures, \
@@ -1385,10 +1388,25 @@ if __name__=="__main__":
                                                                                         BATCH_SIZE, \
                                                                                         LOG_DIR, \
                                                                                         visualization_results=completed_visualization_results)
-             
             progress_bar.update(len(done))
 
-            #defensive programming to ensure WAIT output list of futures are empty
+
+            # monitor system resource usage and adjust batch size accordingly
+            scheduler_info = client.scheduler_info()
+            all_workers_below_cpu_threshold = all(worker['metrics']['cpu'] < CPU_UTILIZATION_THRESHOLD for worker in scheduler_info['workers'].values())
+            all_workers_below_memory_threshold = all(worker['metrics']['memory'] < MEMORY_UTILIZATION_THRESHOLD for worker in scheduler_info['workers'].values())
+
+     
+            if (all_workers_below_cpu_threshold and all_workers_below_memory_threshold):
+                BATCH_SIZE = int(math.ceil(BATCH_SIZE * INCREASE_FACTOR)) if int(math.ceil(BATCH_SIZE * INCREASE_FACTOR)) < MAX_BATCH_SIZE else MAX_BATCH_SIZE
+                logging.info(f"Increasing batch size to {BATCH_SIZE}")
+            else:
+                BATCH_SIZE = max(MIN_BATCH_SIZE, int(BATCH_SIZE * (1-DECREASE_FACTOR)))
+                logging.info(f"Decreasing batch size to {BATCH_SIZE}")
+                #garbage_collection(True, 'Batch Size Decrease')
+
+
+            #defensive programming to ensure WAIT output list of futures are cancelled to clear memory
             for f in done: client.cancel(f)
             for f in done_train: client.cancel(f)
             for f in completed_visualization_results: client.cancel(f)
@@ -1481,8 +1499,8 @@ import pyarrow.parquet as pa
 #parquetFile = pa.ParquetFile('test.parquet')
 # print(parquetFile.schema)
 
-#df = pd.read_parquet(r'C:\_harvester\data\lda-models\2010-2014\metadata\metadata.parquet')
-#df.to_csv(r'C:\_harvester\data\lda-models\2010-2014\metadata-09262024d.csv', sep=';')
+#df = pd.read_parquet(r'C:\_harvester\data\lda-models\2020-2024\metadata\metadata.parquet')
+#df.to_csv(r'C:\_harvester\data\lda-models\2020-2024\metadata-09282024d.csv', sep=';')
 
 
 # %%
