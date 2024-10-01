@@ -74,8 +74,8 @@ from statistics import mean
 import logging
 from datetime import datetime
 
-DECADE_TO_PROCESS ='2020-2024'
-LOG_DIRECTORY = f"C:/_harvester/data/lda-models/{DECADE_TO_PROCESS}/log/"
+DECADE_TO_PROCESS ='2015-2019'
+LOG_DIRECTORY = f"C:/topic-modeling/data/lda-models/{DECADE_TO_PROCESS}/log/"
 # Ensure the LOG_DIRECTORY exists
 os.makedirs(LOG_DIRECTORY, exist_ok=True)
 
@@ -88,7 +88,7 @@ now = datetime.now()
 #       %m is the two-digit month (01-12)
 #       %H%M is the hour (00-23) followed by minute (00-59) in 24hr format
 #log_filename = now.strftime('log-%w-%m-%Y-%H%M.log')
-log_filename = 'log-0945.log'
+log_filename = 'log-1049.log'
 LOGFILE = os.path.join(LOG_DIRECTORY,log_filename)
 
 # Configure logging to write to a file with this name
@@ -141,13 +141,13 @@ MAXIMUM_CORES = 12
 
 THREADS_PER_CORE = 12
 
-RAM_MEMORY_LIMIT = "100GB" # Dask diagnostics significantly overestimates RAM usage -- nowhere near OS RAM measurement
+RAM_MEMORY_LIMIT = "50GB" # Dask diagnostics significantly overestimates RAM usage -- nowhere near OS RAM measurement
 
 CPU_UTILIZATION_THRESHOLD = 110 # eg 85%
 MEMORY_UTILIZATION_THRESHOLD = 97 * (1024 ** 3)  # Convert GB to bytes
 
 # Specify the local directory path, spilling will be written here
-DASK_DIR = '/_harvester/dask-spill'
+DASK_DIR = '/topic-modeling/dask-spill'
 
 # specify the number of passes for Gensim LdaModel
 PASSES = 15
@@ -171,12 +171,12 @@ PER_WORD_TOPICS = True
 NUM_DOCUMENTS = 25
 
 # the number of documents to read from the JSON source file per batch
-FUTURES_BATCH_SIZE = 75
+FUTURES_BATCH_SIZE = 50
 
 # Constants for adaptive batching and retries
 # Number of futures to process per iteration
-BATCH_SIZE = 80 # number of documents, value must be greater than FUTURES_BATCH_SIZE
-MAX_BATCH_SIZE = 125
+BATCH_SIZE = 60 # number of documents, value must be greater than FUTURES_BATCH_SIZE
+MAX_BATCH_SIZE = 100
 MIN_BATCH_SIZE = math.ceil(FUTURES_BATCH_SIZE * 1.01)
 INCREASE_FACTOR = 1.05  # Increase batch size by p% upon success
 DECREASE_FACTOR = .10 # Decrease batch size by p% upon failure or timeout
@@ -185,7 +185,7 @@ BASE_WAIT_TIME = 30     # Base wait time in seconds for exponential backoff
 
 
 # Load data from the JSON file
-DATA_SOURCE = "C:/_harvester/data/tokenized-sentences/2020-2024/2020-2024_min_six_word-w-bigrams.json"
+DATA_SOURCE = "C:/topic-modeling/data/tokenized-sentences/2015-2019/2015-2019_min_six_word-w-bigrams.json"
 TRAIN_RATIO = .80
 
 TIMEOUT = None #"90 minutes"
@@ -232,7 +232,7 @@ import zipfile
 
 # Define the top-level directory and subdirectories
 DECADE = DECADE_TO_PROCESS
-ROOT_DIR = f"C:/_harvester/data/lda-models/{DECADE}"
+ROOT_DIR = f"C:/topic-modeling/data/lda-models/{DECADE}"
 LOG_DIR = os.path.join(ROOT_DIR, "log")
 IMAGE_DIR = os.path.join(ROOT_DIR, "visuals")
 PYLDA_DIR = os.path.join(IMAGE_DIR, 'pyLDAvis')
@@ -1499,8 +1499,8 @@ import pyarrow.parquet as pa
 #parquetFile = pa.ParquetFile('test.parquet')
 # print(parquetFile.schema)
 
-#df = pd.read_parquet(r'C:\_harvester\data\lda-models\2020-2024\metadata\metadata.parquet')
-#df.to_csv(r'C:\_harvester\data\lda-models\2020-2024\metadata-09282024d.csv', sep=';')
+#df = pd.read_parquet(r'C:\topic-modeling\data\lda-models\2020-2024\metadata\metadata.parquet')
+#df.to_csv(r'C:\topic-modeling\data\lda-models\2020-2024\metadata-09282024d.csv', sep=';')
 
 
 # %%
