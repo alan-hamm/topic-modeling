@@ -1,15 +1,15 @@
 
 libname A postgres server='127.0.0.1' port=5432  user=postgres password='admin' database=lda_manager_test;
 
-/*
-proc import datafile="C:\_harvester\data\lda-models\2010s_html\metadata\metadata-09082024.csv"
+
+proc import datafile="C:\_harvester\data\lda-models\2020-2024\metadata\metadata-09282024.csv"
 	out=metadata
 	dbms=dlm
 	replace;
 	delimiter=';';
 	guessingrows=max;
 run;
-*/
+
 
 /*
 expected_dtypes = {
@@ -42,13 +42,18 @@ expected_dtypes = {
         'time': 'datetime64[ns]',
     } 
 */
-data WORK.METADATA    ;
+
+
+data WORK.METADATA (drop=_index)  ;
 %let _EFIERR_ = 0; /* set the ERROR detection macro variable */
-infile 'C:\_harvester\data\lda-models\2010s_html\metadata\metadata-09082024.csv' delimiter = ';' flowover DSD lrecl=32767 firstobs=2 TERMSTR=cr;
-   informat index $84. ;
+infile "C:\_harvester\data\lda-models\2020-2024\metadata\metadata-09282024.csv" delimiter = ';' missover DSD lrecl=32767 firstobs=2 TERMSTR=cr;
+	length index 3;
+   informat _index $84. ;
+   informat time_key $1024.;
    informat type $53. ;
+   informat num_workers 3.;
    informat batch_size best32. ;
-   informat text $87. ;
+   informat num_documents 3.;
    informat text_sha256 $64. ;
    informat text_md5 $32. ;
    informat convergence best32. ;
@@ -65,58 +70,75 @@ infile 'C:\_harvester\data\lda-models\2010s_html\metadata\metadata-09082024.csv'
     informat eval_every best32. ;
     informat chunksize best32. ;
     informat random_state best32. ;
-    informat per_word_topics $4. ;
-    informat top_words $78. ;
-	informat time ANYDTDTE.;
+    informat per_word_topics $5. ;
+    informat top_words $2048. ;
+	informat create_pylda $5.;
+	informat create_pcoa $5.;
+	*informat time ANYDTDTE.;
+	*informat end_time ANYDTDTE.;
+	informat time YMDDTTM26.6;
+	informat end_time YMDDTTM26.6;
 
-    format index $84. ;
-    format type $53. ;
-    format batch_size best12. ;
-    format text $87. ;
-    format text_sha256 $64. ;
-    format text_md5 $32. ;
-    format convergence best12. ;
-    format perplexity best12. ;
-    format coherence best12. ;
-    format topics best12. ;
-    format alpha_str $18. ;
-    format n_alpha best12. ;
-    format beta_str $18. ;
-    format n_beta best12. ;
-    format passes best12. ;
-    format iterations best12. ;
-    format update_every best12. ;
-    format eval_every best12. ;
-    format chunksize best12. ;
-    format random_state best12. ;
-    format per_word_topics $4. ;
-    format top_words $78. ;
-	format time datetime20.1;
+   format _index $84. ;
+   format time_key $1024.;
+   format type $53. ;
+   format num_workers 3.;
+   format batch_size best32. ;
+   format num_documents 3.;
+   format text_sha256 $64. ;
+   format text_md5 $32. ;
+   format convergence best32. ;
+   format perplexity best32. ;
+   format coherence best32. ;
+   format topics best32. ;
+   format alpha_str $18. ;
+   format n_alpha best32. ;
+   format beta_str $18. ;
+   format n_beta best32. ;
+    format passes best32. ;
+    format iterations best32. ;
+    format update_every best32. ;
+    format eval_every best32. ;
+    format chunksize best32. ;
+    format random_state best32. ;
+    format per_word_topics $5. ;
+    format top_words $2048. ;
+	format create_pylda $5.;
+	format create_pcoa $5.;
+	format time datetime26.6;
+	format end_time datetime26.6;
  input
-             index  $
-             type  $
-             batch_size
-             text  $
-             text_sha256  $
-             text_md5  $
-             convergence
-             perplexity
-             coherence
-             topics
-             alpha_str  $
-             n_alpha
-             beta_str  $
-             n_beta
-             passes
-             iterations
-             update_every
-             eval_every
-             chunksize
-             random_state
-             per_word_topics  $
-             top_words  $
-			 time 
+	     _index $
+	    time_key $
+	    type $
+	    num_workers 
+	    batch_size 
+	    num_documents 
+	    text_sha256 $
+	    text_md5 $
+	    convergence 
+	    perplexity 
+	    coherence 
+	    topics 
+	    alpha_str $
+	    n_alpha 
+	    beta_str $
+	    n_beta 
+	     passes 
+	     iterations 
+	     update_every
+	     eval_every
+	     chunksize
+	     random_state
+	     per_word_topics $
+	     top_words $
+		 create_pylda $
+		 create_pcoa $
+		 time 
+		 end_time 
+	;
  ;
+ index = _n_;
  if _ERROR_ then call symputx('_EFIERR_',1);  /* set ERROR detection macro variable */
 run;
 
@@ -178,26 +200,38 @@ data metadata_fixed;
 	drop _coherence;
 run;
 
+proc sort data=metadata_fixed out=metadata_sorted; by index text_sha256; run;
 ods graphics on / width=1000PX;
 ods html close;
-ods pdf file = "C:\_harvester\data\lda-models\2010s_html\stats\2010-2014-univariate.pdf";
-title c=red "2010 - 2014 Univariate of Train Data";
+ods pdf file = "C:\_harvester\data\lda-models\2020-2024\2020-2024-univariate.pdf";
+title c=red "2020 - 2024 Univariate of Train Data";
 ods proclabel="Univariate of Train Data";
-proc univariate data=metadata_fixed(where=(type='train')) plots; var coherence per_word_bound _perplexity_; *histogram coherence perplexity _perplexity; run;
+proc univariate data=metadata_sorted(where=(type='train')) plots; by text_sha256; var coherence per_word_bound _perplexity_; *histogram coherence perplexity _perplexity; run;
 
 title "Train Frequency Table";
 ods proclabel="Train Frequency Table";
-proc freq data=metadata_fixed(where=(type="train")); tables alpha_str*beta_str; tables n_alpha*n_beta; run;
+proc freq data=metadata_sorted(where=(type="train")); by text_sha256; tables alpha_str*beta_str; tables n_alpha*n_beta; run;
 
-title c=red "2010 - 2014 Univariate of Eval Data";
+title c=red "2020 - 2024 Univariate of Eval Data";
 ods proclabel="Univariate of Eval Data";
-proc univariate data=metadata_fixed(where=(type='eval')) plots; var coherence per_word_bound _perplexity_; *histogram coherence perplexity _perplexity; run;
+proc univariate data=metadata_sorted(where=(type='eval')) plots; by text_sha256;var coherence per_word_bound _perplexity_; *histogram coherence perplexity _perplexity; run;
 title "Eval Frequency Table";
 ods proclabel="Eval Frequency Table";
-proc freq data=metadata_fixed(where=(type="eval")); tables alpha_str*beta_str;  tables n_alpha*n_beta; run;
+proc freq data=metadata_sorted(where=(type="eval")); by text_sha256; tables alpha_str*beta_str;  tables n_alpha*n_beta; run;
 
 ods pdf close;
 ods html;
+
+ods graphics on / width=750PX;
+proc sort data=metadata_fixed out=metadata_sorted; by topics; run;
+proc sgplot data=metadata_sorted(where=(coherence>.8));
+series x=topics y=coherence / group=type;
+*series x=index y=per_word_bound / x2axis;
+run;
+proc sgplot data=metadata_sorted(where=(topics=110));
+series x=index y=coherence / group=type;
+*series x=index y=per_word_bound / x2axis;
+run;
 
 proc sql noprint;
 	create table explore as
